@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.sirveillanceai.mixokeys.lyrics.Lyrics
 import com.sirveillanceai.mixokeys.midi.Midi
 import com.sirveillanceai.mixokeys.midi.Song
+import com.sirveillanceai.mixokeys.ui.Skin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,11 +29,13 @@ data class AppState(
     val error: String? = null,
     val recent: List<Recent> = emptyList(),
     val lastCrash: String? = null,
+    val skin: Skin = Skin.Paper,
+    val settingsOpen: Boolean = false,
 )
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("library", 0)
-    private val _s = MutableStateFlow(AppState(recent = loadRecent(), lastCrash = CrashReport.takeReport(app)))
+    private val _s = MutableStateFlow(AppState(recent = loadRecent(), lastCrash = CrashReport.takeReport(app), skin = Skin.named(prefs.getString("skin", null))))
     val state: StateFlow<AppState> = _s
 
     private fun lyricsDir() = File(getApplication<Application>().filesDir, "lyrics").apply { mkdirs() }
@@ -44,6 +47,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun saveRecent(list: List<Recent>) = prefs.edit().putString("recent", list.joinToString("\n") { "${it.uri}\t${it.name}" }).apply()
 
+    fun setSkin(k: Skin) { prefs.edit().putString("skin", k.name).apply(); _s.update { it.copy(skin = k) } }
+    fun openSettings(open: Boolean) = _s.update { it.copy(settingsOpen = open) }
     fun dismissCrash() = _s.update { it.copy(lastCrash = null) }
     fun dismissError() = _s.update { it.copy(error = null) }
     fun close() = _s.update { it.copy(song = null, lyrics = null, songKey = null) }

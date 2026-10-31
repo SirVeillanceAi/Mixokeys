@@ -188,6 +188,7 @@ class BeamEl(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val t: 
 class TieEl(val x1: Float, val x2: Float, val y: Float, val above: Boolean) : El()
 class DotEl(val x: Float, val y: Float, override val on: Double, override val off: Double) : El()
 class TextEl(val text: String, val x: Float, val y: Float, val size: Float, val serif: Boolean, val center: Boolean = false) : El()
+class NameEl(val text: String, val x: Float, val y: Float, override val on: Double, override val off: Double) : El()
 class FlagEl(val x: Float, val y: Float, val up: Boolean, val count: Int, override val on: Double, override val off: Double) : El()
 
 class SystemLayout(
@@ -198,6 +199,9 @@ class SystemLayout(
     val top: Float,        // highest point used, relative to the treble top line (negative = above)
     val bottom: Float,     // lowest point used
     val width: Float,
+    val headerEnd: Int,     // els[0 until headerEnd] are the clefs, key and time signature at the start
+    val headerW: Float,
+    val staffBottom: Float, // bottom line of the lowest staff
 ) {
     val height get() = bottom - top
     fun xAt(t: Double): Float {
@@ -235,21 +239,28 @@ object Engraver {
     private val ACC_W = mapOf(1 to 0.92f, -1 to 0.82f, 0 to 0.72f)
     private val ACC_LIFT = mapOf(1 to 0.54f, -1 to 0.33f, 0 to 0.54f)
 
-    fun yOf(staff: Int, step: Int) = if (staff == 0) TREBLE_BOTTOM - (step - 37) / 2f else BASS_BOTTOM - (step - 25) / 2f
-    private fun middle(staff: Int) = if (staff == 0) 2f else BASS_TOP + 2f
+    private var staves = listOf(0, 1)
+    private var names = false
+    private fun staffTop(staff: Int) = if (staff == 1 && staves.size == 2) BASS_TOP else 0f
+    private val lastBottom get() = staffTop(staves.last()) + 4f
+    fun yOf(staff: Int, step: Int) = if (staff == 0) staffTop(0) + 4f - (step - 37) / 2f else staffTop(1) + 4f - (step - 25) / 2f
+    private fun middle(staff: Int) = staffTop(staff) + 2f
+    private val LETTER = "CDEFGAB"
 
     private fun colWidth(d: Int) = 1.9f + 1.15f * (ln(d.toFloat()) / ln(2f))
 
     /** Lays the score out in systems [width] staff spaces wide. */
-    fun layout(score: Score, width: Float): List<SystemLayout> {
+    fun layout(score: Score, width: Float, staves: List<Int> = listOf(0, 1), names: Boolean = false): List<SystemLayout> {
+        this.staves = staves; this.names = names
         val key = score.key
         val keyW = abs(key) * 1.0f
         data class MW(val m: Measure, val cols: List<Int>, val colW: FloatArray, val lead: Float, val total: Float)
         val mws = score.measures.map { m ->
-            val cols = m.events.map { it.pos }.distinct().sorted()
+            val mine = m.events.filter { it.staff in staves }
+            val cols = mine.map { it.pos }.distinct().sorted()
             val cw = FloatArray(cols.size) { i ->
                 val d = (cols.getOrNull(i + 1) ?: m.len) - cols[i]
-                val evs = m.events.filter { it.pos == cols[i] }
+                val evs = mine.filter { it.pos == cols[i] }
                 var w = if (evs.all { it.measureRest }) 6f else colWidth(d.coerceAtLeast(1))
                 if (evs.any { e -> e.heads.any { it.showAcc != null } }) w += 1.1f
                 if (evs.any { it.dots > 0 }) w += 0.6f
@@ -286,19 +297,20 @@ object Engraver {
         val anchors = ArrayList<Pair<Double, Float>>()
         val key = score.key
         // Header: clefs, key signature, time signature
-        els += GlyphEl(G_CLEF, 0.5f, TREBLE_BOTTOM)
-        els += GlyphEl(F_CLEF, 0.55f, BASS_BOTTOM)
+        if (0 in staves) els += GlyphEl(G_CLEF, 0.5f, staffTop(0) + 4f)
+        if (1 in staves) els += GlyphEl(F_CLEF, 0.55f, staffTop(1) + 4f)
         val sharps = intArrayOf(45, 42, 46, 43, 40, 44, 41); val flats = intArrayOf(41, 44, 40, 43, 39, 42, 38)
         for (k in 0 until abs(key)) {
             val st = if (key > 0) sharps[k] else flats[k]
             val a = if (key > 0) 1 else -1
             val x = 3.7f + k * 1.0f
-            els += GlyphEl(ACC.getValue(a), x - LSB, yOf(0, st) + ACC_LIFT.getValue(a))
-            els += GlyphEl(ACC.getValue(a), x - LSB, yOf(1, st - 14) + ACC_LIFT.getValue(a))
+            if (0 in staves) els += GlyphEl(ACC.getValue(a), x - LSB, yOf(0, st) + ACC_LIFT.getValue(a))
+            if (1 in staves) els += GlyphEl(ACC.getValue(a), x - LSB, yOf(1, st - 14) + ACC_LIFT.getValue(a))
         }
         val m0 = line.first().first
         if (timeInHeader) timeSig(els, header - 2.0f, m0.num, m0.den)
         if (!first) els += TextEl("${m0.index + 1}", 0.2f, -1.4f, 1.3f, serif = true)
+        val headerEnd = els.size
 
         var x = header
         val staffEnd: Float
@@ -307,30 +319,31 @@ object Engraver {
             x += 1.0f
             val colX = FloatArray(cols.size)
             var cx = x
-            for (c in cols.indices) { colX[c] = cx + (if (m.events.any { it.pos == cols[c] && it.heads.any { h -> h.showAcc != null } }) 1.1f else 0f) + HEAD_W / 2; cx += colW[c] }
+            for (c in cols.indices) { colX[c] = cx + (if (m.events.any { it.staff in staves && it.pos == cols[c] && it.heads.any { h -> h.showAcc != null } }) 1.1f else 0f) + HEAD_W / 2; cx += colW[c] }
             for (c in cols.indices) anchors += score.timeOf(m, cols[c].toDouble()) to colX[c]
             val mEndX = cx + 0.6f
             for (ev in m.events) {
+                if (ev.staff !in staves) continue
                 val c = cols.indexOf(ev.pos)
                 ev.x = if (ev.measureRest) (x + mEndX) / 2f else colX[c]
             }
             engraveMeasure(score, m, els)
-            els += LineEl(mEndX, 0f, mEndX, BASS_BOTTOM, 0.13f)
+            els += LineEl(mEndX, 0f, mEndX, lastBottom, 0.13f)
             x = mEndX
         }
         staffEnd = x
         val last = line.last().first
         anchors += score.timeOf(last, last.len.toDouble()) to staffEnd
         if (last.index == score.measures.size - 1) {
-            els += LineEl(staffEnd - 0.55f, 0f, staffEnd - 0.55f, BASS_BOTTOM, 0.13f)
-            els += LineEl(staffEnd - 0.2f, 0f, staffEnd - 0.2f, BASS_BOTTOM, 0.45f)
+            els += LineEl(staffEnd - 0.55f, 0f, staffEnd - 0.55f, lastBottom, 0.13f)
+            els += LineEl(staffEnd - 0.2f, 0f, staffEnd - 0.2f, lastBottom, 0.45f)
         }
         // staff lines and the opening bar line
-        for (s in 0..1) for (l in 0..4) { val y = (if (s == 0) 0f else BASS_TOP) + l; els += LineEl(0f, y, staffEnd, y, 0.1f) }
-        els += LineEl(0.05f, 0f, 0.05f, BASS_BOTTOM, 0.13f)
+        for (s in staves) for (l in 0..4) { val y = staffTop(s) + l; els += LineEl(0f, y, staffEnd, y, 0.1f) }
+        els += LineEl(0.05f, 0f, 0.05f, lastBottom, 0.13f)
 
         // ties need the x of the next piece, which may be in this system
-        val evsHere = line.flatMap { it.first.events }.toSet()
+        val evsHere = line.flatMap { it.first.events.filter { e -> e.staff in staves } }.toSet()
         for (ev in evsHere) {
             val nxt = ev.tieNext ?: continue
             for (h in ev.heads.filter { it.tieOut }) {
@@ -341,7 +354,7 @@ object Engraver {
             }
         }
 
-        var top = -3.2f; var bottom = BASS_BOTTOM + 3.5f
+        var top = -3.2f; var bottom = lastBottom + 3.5f
         for (e in els) when (e) {
             is LineEl -> { top = min(top, min(e.y1, e.y2) - 1f); bottom = max(bottom, max(e.y1, e.y2) + 1f) }
             is GlyphEl -> { top = min(top, e.y - 4.5f); bottom = max(bottom, e.y + 1.5f) }
@@ -350,19 +363,19 @@ object Engraver {
         }
         top = max(top, -9f).let { t -> min(t, -3.2f) }
         val firstM = line.first().first; val lastM = line.last().first
-        return SystemLayout(els, anchors, score.timeOf(firstM, 0.0), score.timeOf(lastM, lastM.len.toDouble()), top, bottom, staffEnd)
+        return SystemLayout(els, anchors, score.timeOf(firstM, 0.0), score.timeOf(lastM, lastM.len.toDouble()), top, bottom, staffEnd, headerEnd, header, lastBottom)
     }
 
     private fun timeSig(els: MutableList<El>, cx: Float, num: Int, den: Int) {
-        for (s in 0..1) {
-            val base = if (s == 0) 0f else BASS_TOP
+        for (s in staves) {
+            val base = staffTop(s)
             els += TextEl("$num", cx, base + 1.95f, 2.6f, serif = true, center = true)
             els += TextEl("$den", cx, base + 3.95f, 2.6f, serif = true, center = true)
         }
     }
 
     private fun engraveMeasure(score: Score, m: Measure, els: MutableList<El>) {
-        for (staff in 0..1) {
+        for (staff in staves) {
             val evs = m.events.filter { it.staff == staff }
             // beam groups: 8ths and 16ths within one beat
             val groups = ArrayList<MutableList<Ev>>()
@@ -425,6 +438,7 @@ object Engraver {
             val dx = if (h.step in displaced) (if (ev.stemUp) HEAD_W - 0.12f else -(HEAD_W - 0.12f)) else 0f
             val cx = ev.x + dx
             els += GlyphEl(glyph, cx - hw / 2 - LSB, y + 0.55f, on, off)
+            if (names) els += NameEl(LETTER[((h.step % 7) + 7) % 7].toString(), cx, y, on, off)
             // ledger lines
             val bottomStep = if (staff == 0) 37 else 25
             var l = bottomStep - 2
@@ -446,7 +460,7 @@ object Engraver {
     }
 
     private fun rest(els: MutableList<El>, ev: Ev, staff: Int) {
-        val bottom = if (staff == 0) TREBLE_BOTTOM else BASS_BOTTOM
+        val bottom = staffTop(staff) + 4f
         val base = if (ev.measureRest) 16 else ev.base
         val w = REST_W.getValue(base)
         val baseline = when (base) { 16 -> bottom - 0.9f; 8 -> bottom - 1.0f; else -> bottom }

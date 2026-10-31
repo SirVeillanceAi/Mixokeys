@@ -48,7 +48,7 @@ import com.sirveillanceai.mixokeys.ui.FallingView
 import com.sirveillanceai.mixokeys.ui.LyricsBar
 import com.sirveillanceai.mixokeys.ui.Palette
 import com.sirveillanceai.mixokeys.ui.SheetView
-import com.sirveillanceai.mixokeys.ui.Sheet
+import com.sirveillanceai.mixokeys.ui.Skin
 import com.sirveillanceai.mixokeys.notation.Score
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -90,7 +90,8 @@ private fun App(vm: LibraryViewModel) {
     val s by vm.state.collectAsStateWithLifecycle()
     Box(Modifier.fillMaxSize().background(Palette.Bg).safeDrawingPadding()) {
         val song = s.song
-        if (song != null) LessonScreen(song, s.lyrics, vm) else HomeScreen(s, vm)
+        if (s.settingsOpen) SettingsScreen(s, vm)
+        else if (song != null) LessonScreen(song, s.lyrics, s.skin, vm) else HomeScreen(s, vm)
         s.error?.let { msg ->
             AlertDialog(onDismissRequest = vm::dismissError, confirmButton = { TextButton(onClick = vm::dismissError) { Text("OK") } },
                 title = { Text("Something went wrong") }, text = { Text(msg) })
@@ -114,9 +115,12 @@ private val MIDI_TYPES = arrayOf("audio/midi", "audio/x-midi", "audio/mid", "aud
 private fun HomeScreen(s: AppState, vm: LibraryViewModel) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.open(uri, persist = true) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Mixokeys", color = Palette.Text1, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-            Text("Learn songs on piano or guitar from MIDI files, with karaoke lyrics.", color = Palette.Muted, fontSize = 13.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Mixokeys", color = Palette.Text1, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                Text("Learn songs on piano or guitar from MIDI files, with karaoke lyrics.", color = Palette.Muted, fontSize = 13.sp)
+            }
+            TextButton(onClick = { vm.openSettings(true) }) { Text("Settings", color = Palette.Accent) }
         }
         s.lastCrash?.let { report ->
             val clip = LocalClipboardManager.current
@@ -188,13 +192,15 @@ private fun SmallButton(text: String, modifier: Modifier = Modifier, onClick: ()
 }
 
 @Composable
-private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
+private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryViewModel) {
     val context = LocalContext.current
     val parts = remember(song) { song.parts.filter { it.notes.isNotEmpty() } }
     var mode by rememberSaveable(song) { mutableStateOf(Mode.Sheet) }
     var shown by remember(song) { mutableStateOf(defaultShown(parts)) }
     var tabPartId by remember(song) { mutableStateOf(Tab.defaultPart(parts)?.id) }
-    var space by rememberSaveable { mutableFloatStateOf(7f) }   // sheet size: dp per staff space
+    var space by rememberSaveable(skin) { mutableFloatStateOf(skin.space) }   // sheet size: dp per staff space
+    var hand by rememberSaveable(song) { mutableIntStateOf(0) }   // one-hand skin: 0 right, 1 left, 2 both
+    var speed by remember(song) { mutableDoubleStateOf(1.0) }
     var tabZoom by remember { mutableFloatStateOf(120f) }
     var playing by remember { mutableStateOf(false) }
     var now by remember { mutableDoubleStateOf(0.0) }
@@ -218,17 +224,27 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
     val togglePlay = { if (player.playing) player.pause() else player.play(); playing = player.playing }
     val zoomIn = { if (mode == Mode.Guitar) tabZoom = (tabZoom * 1.25f).coerceAtMost(400f) else space = (space * 1.15f).coerceAtMost(13f) }
     val zoomOut = { if (mode == Mode.Guitar) tabZoom = (tabZoom / 1.25f).coerceAtLeast(40f) else space = (space / 1.15f).coerceAtLeast(4.5f) }
-    val nextSpeed = { val sp = when (player.speed) { 1.0 -> 0.5; 0.5 -> 0.75; else -> 1.0 }; player.setSpeed(sp); playing = player.playing }
-    val speedLabel = "${(player.speed * 100).toInt()}%"
+    val nextSpeed = { val sp = when (speed) { 1.0 -> 0.5; 0.5 -> 0.75; else -> 1.0 }; player.setSpeed(sp); speed = sp; playing = player.playing }
+    val speedLabel = "${(speed * 100).toInt()}%"
+    val staves = if (skin.oneHand) when (hand) { 0 -> listOf(0); 1 -> listOf(1); else -> listOf(0, 1) } else listOf(0, 1)
 
     @Composable
     fun LessonView(modifier: Modifier) {
         val sheet = mode == Mode.Sheet
-        Box(modifier.background(if (sheet) Sheet.Paper else Palette.Paper, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
+        Box(modifier.background(if (sheet) skin.paper else Palette.Paper, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))) {
             when (mode) {
                 Mode.Sheet -> if (score == null) Hint("Pick a part to show under Parts.") else
-                    SheetView(score, lyrics, now, space, seek, Modifier.fillMaxSize())
+                    Column(Modifier.fillMaxSize()) {
+                        if (skin.oneHand) Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Right hand", "Left hand", "Both").forEachIndexed { i, label ->
+                                val sel = hand == i
+                                Box(Modifier.weight(1f).height(40.dp).background(if (sel) Palette.Accent else Color(0x14000000), RoundedCornerShape(10.dp)).clickable { hand = i },
+                                    contentAlignment = Alignment.Center) { Text(label, color = if (sel) Palette.OnAccent else skin.ink, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                            }
+                        }
+                        SheetView(score, lyrics, now, skin, space, staves, seek, Modifier.fillMaxWidth().weight(1f))
+                    }
                 Mode.Falling -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
                     FallingView(song, shownNotes, now, seek, Modifier.fillMaxSize())
                 Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, tabZoom, seek) { tabPartId = it }
@@ -241,6 +257,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Parts (show / hear)") }, onClick = { menu = false; showParts = true })
             DropdownMenuItem(text = { Text("Lyrics") }, onClick = { menu = false; showLyricsMenu = true })
+            DropdownMenuItem(text = { Text("Settings and skins") }, onClick = { menu = false; vm.openSettings(true) })
             DropdownMenuItem(text = { Text("Bigger notes") }, onClick = { zoomIn() })
             DropdownMenuItem(text = { Text("Smaller notes") }, onClick = { zoomOut() })
             DropdownMenuItem(text = { Text("Back 5 seconds") }, onClick = { menu = false; seek(now - 5) })
@@ -259,7 +276,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val landscape = maxWidth > maxHeight
+        val landscape = maxWidth > maxHeight || (skin.rail && mode == Mode.Sheet)
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
                 Column(Modifier.width(76.dp).fillMaxHeight().padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
@@ -289,6 +306,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
                     }
                     TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
                     TextButton(onClick = { showLyricsMenu = true }) { Text("Lyrics", color = Palette.Accent) }
+                    Box { IconBtn("More", { menu = true }) { Text("⋮", color = Palette.Text1, fontSize = 22.sp) }; MoreMenu() }
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).background(Palette.Card, RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -464,5 +482,50 @@ private fun TapSync(lyrics: Lyrics, player: MidiPlayer, onDone: (Lyrics) -> Unit
                 if (taps.isNotEmpty()) onDone(Lyrics.fromTaps(lines.take(taps.size), taps.toList(), Double.MAX_VALUE)) else onCancel()
             }) { Text(if (taps.isEmpty()) "Cancel" else "Save", color = Palette.Muted) }
         }
+    }
+}
+
+@Composable
+private fun SettingsScreen(s: AppState, vm: LibraryViewModel) {
+    BackHandler { vm.openSettings(false) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBtn("Back", { vm.openSettings(false) }) { Text("‹", color = Palette.Text1, fontSize = 26.sp) }
+            Text("Settings", color = Palette.Text1, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Text("Sheet music skin", color = Palette.Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Skin.entries.forEach { k ->
+            val sel = s.skin == k
+            Row(
+                Modifier.fillMaxWidth().background(Palette.Card, RoundedCornerShape(16.dp))
+                    .border(if (sel) 2.dp else 1.dp, if (sel) Palette.Accent else Palette.Line, RoundedCornerShape(16.dp))
+                    .clickable { vm.setSkin(k) }.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                SkinSwatch(k)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(k.title, color = Palette.Text1, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(k.blurb, color = Palette.Muted, fontSize = 12.5.sp)
+                }
+                RadioButton(selected = sel, onClick = { vm.setSkin(k) })
+            }
+        }
+        Text("You can also change the note size with + and − while playing.", color = Palette.Muted, fontSize = 12.sp)
+    }
+}
+
+/** A tiny staff in the skin's colours. */
+@Composable
+private fun SkinSwatch(k: Skin) {
+    androidx.compose.foundation.Canvas(Modifier.size(width = 64.dp, height = 48.dp).background(k.paper, RoundedCornerShape(10.dp)).border(1.dp, Palette.Line, RoundedCornerShape(10.dp))) {
+        val gap = size.height / 8f
+        for (i in 0..4) drawLine(k.lines, androidx.compose.ui.geometry.Offset(4f, gap * (i + 1.6f)), androidx.compose.ui.geometry.Offset(size.width - 4f, gap * (i + 1.6f)), 1.5f)
+        val xs = listOf(0.3f, 0.52f, 0.74f); val ys = listOf(4.1f, 3.1f, 2.6f)
+        xs.forEachIndexed { i, x ->
+            val c = if (i == 1) k.now else k.ink
+            val r = if (k.names) gap * 0.75f else gap * 0.55f
+            drawOval(c, androidx.compose.ui.geometry.Offset(size.width * x - r * 1.2f, gap * ys[i] - r), androidx.compose.ui.geometry.Size(r * 2.4f, r * 2f))
+        }
+        if (k.scroll) drawLine(k.now, androidx.compose.ui.geometry.Offset(size.width * 0.4f, gap * 0.8f), androidx.compose.ui.geometry.Offset(size.width * 0.4f, gap * 7.2f), 2f)
     }
 }
