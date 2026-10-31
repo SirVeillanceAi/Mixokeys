@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReport.install(this)
         enableEdgeToEdge()
         sharedUri(intent)?.let { vm.pick(it) }
         setContent {
@@ -120,6 +121,17 @@ private fun HomeScreen(ui: UiState, vm: PipelineViewModel) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.pick(uri) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Title("Mixokeys", "Test build · piano notes from any song, on this phone")
+        ui.lastCrash?.let { report ->
+            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+            Panel {
+                Text("The last run closed unexpectedly", color = Bad, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(report, color = Text1, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(report)) }, shape = RoundedCornerShape(12.dp)) { Text("Copy report", color = Text1) }
+                    OutlinedButton(onClick = vm::dismissCrash, shape = RoundedCornerShape(12.dp)) { Text("Dismiss", color = Muted) }
+                }
+            }
+        }
         Panel {
             Text("Song", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Text(ui.pickedName ?: "No song picked yet", color = Text1, fontSize = 16.sp, fontWeight = FontWeight.Bold)

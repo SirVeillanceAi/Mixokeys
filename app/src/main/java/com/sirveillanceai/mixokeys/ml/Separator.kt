@@ -25,6 +25,8 @@ class Separator(env: OrtEnvironment, modelFile: File, threads: Int) : Closeable 
     private val session: OrtSession = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions().apply {
         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         setIntraOpNumThreads(threads)
+        // Don't keep a growing memory pool between windows; phones have little headroom.
+        setCPUArenaAllocator(false)
     })
     private val inputName = session.inputNames.first()
 
@@ -41,7 +43,7 @@ class Separator(env: OrtEnvironment, modelFile: File, threads: Int) : Closeable 
      * @param want indexes into [STEMS] to keep (others are discarded to save memory)
      * @return map stem name -> two channels
      */
-    fun separate(stereo: Array<FloatArray>, want: List<Int>, onProgress: (Float) -> Unit): Map<String, Array<FloatArray>> {
+    fun separate(stereo: Array<FloatArray>, want: List<Int>, beforeWindow: (Int, Int) -> Unit = { _, _ -> }, onProgress: (Float) -> Unit): Map<String, Array<FloatArray>> {
         val len = stereo[0].size
         // Normalise like the demucs CLI: by the mean/std of the mono mix.
         var mean = 0.0
@@ -66,6 +68,7 @@ class Separator(env: OrtEnvironment, modelFile: File, threads: Int) : Closeable 
                 for (i in 0 until SEGMENT) input.put(if (i < valid) (ch[offset + i] - fMean) / fStd else 0f)
             }
             input.rewind()
+            beforeWindow(si + 1, starts.size)
             OnnxTensor.createTensor(env, input, longArrayOf(1, 2, SEGMENT.toLong())).use { tensor ->
                 session.run(mapOf(inputName to tensor)).use { result ->
                     val out = (result.get(0) as OnnxTensor).floatBuffer   // [1, 6, 2, SEGMENT]

@@ -46,11 +46,12 @@ data class UiState(
     val error: String? = null,
     val result: Result? = null,
     val modelsReady: Map<String, Boolean> = emptyMap(),
+    val lastCrash: String? = null,
 )
 
 class PipelineViewModel(app: Application) : AndroidViewModel(app) {
     private val store = ModelStore(app)
-    private val _ui = MutableStateFlow(UiState(modelsReady = Models.ALL.associate { it.id to store.isReady(it) }))
+    private val _ui = MutableStateFlow(UiState(modelsReady = Models.ALL.associate { it.id to store.isReady(it) }, lastCrash = CrashReport.takeReport(app)))
     val ui: StateFlow<UiState> = _ui
     private var job: Job? = null
 
@@ -63,11 +64,13 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(pickedUri = uri, pickedName = name, error = null, result = null, steps = emptyList()) }
     }
 
+    fun dismissCrash() = _ui.update { it.copy(lastCrash = null) }
     fun setSolo(v: Boolean) = _ui.update { it.copy(soloPiano = v) }
     fun reset() = _ui.update { it.copy(result = null, steps = emptyList(), error = null) }
 
     fun cancel() {
         job?.cancel()
+        CrashReport.finished(getApplication())
         _ui.update { it.copy(running = false, error = "Stopped.") }
     }
 
@@ -88,6 +91,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 runPipeline(uri, solo, s.pickedName ?: "Song")
             } catch (e: Throwable) {
+                CrashReport.finished(getApplication())
                 if (isActive) {
                     _ui.update { st -> st.copy(running = false, error = e.message ?: e.toString(),
                         steps = st.steps.map { if (it.state == StepState.Running) it.copy(state = StepState.Failed) else it }) }
@@ -113,7 +117,8 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun runPipeline(uri: Uri, solo: Boolean, title: String) {
         val app = getApplication<Application>()
-        val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        fun mark(w: String) = CrashReport.mark(app, w)
         val needed = if (solo) listOf(Models.PIANO) else listOf(Models.DEMUCS_6S, Models.PIANO)
 
         val files = timed("models") { prog ->
@@ -127,6 +132,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         }
         _ui.update { it.copy(modelsReady = Models.ALL.associate { m -> m.id to store.isReady(m) }) }
 
+        mark("reading the audio file")
         val pcm = timed("decode") { prog -> AudioDecoder.decode(app, uri, prog) }
         step("decode") { it.copy(detail = "%.0f s of audio, %d Hz, %d ch".format(pcm.seconds, pcm.sampleRate, pcm.channels.size)) }
 
@@ -140,8 +146,10 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                     if (pcm.sampleRate == Separator.SAMPLE_RATE) st
                     else Array(2) { c -> Resampler.resample(st[c], pcm.sampleRate, Separator.SAMPLE_RATE) { p -> prog(0.05f * (c + p) / 2f) } }
                 }
+                mark("separation: loading the model")
                 Separator(env, files.getValue(Models.DEMUCS_6S.id), threads).use { sep ->
-                    val stems = sep.separate(stereo44, listOf(Separator.STEMS.indexOf("piano"))) { p -> prog(0.05f + 0.95f * p) }
+                    val stems = sep.separate(stereo44, listOf(Separator.STEMS.indexOf("piano")),
+                        beforeWindow = { i, n -> mark("separation: window $i of $n"); step("separate") { it.copy(detail = "Window $i of $n · " + CrashReport.memLine(app)) } }) { p -> prog(0.05f + 0.95f * p) }
                     stems.getValue("piano")
                 }
             }
@@ -155,6 +163,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        mark("reading the piano notes")
         val notes = timed("notes") { prog ->
             PianoTranscriber(env, files.getValue(Models.PIANO.id), threads).use { it.transcribe(mono16k, prog) }
         }
@@ -165,6 +174,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         val midi = File(dir, title.substringBeforeLast('.').replace(Regex("[^\\w\\- ]+"), "").ifBlank { "song" } + " (piano).mid")
         MidiWriter.write(midi, notes, title)
 
+        CrashReport.finished(app)
         _ui.update { it.copy(running = false, result = Result(title, sec, notes, midi, stemFile, uri)) }
     }
 }
