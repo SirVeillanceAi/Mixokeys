@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -74,117 +75,6 @@ private fun musicTypeface(): Typeface {
 private fun Modifier.scrubX(pxPerSec: Float, now: () -> Double, seek: (Double) -> Unit) =
     pointerInput(pxPerSec) { detectHorizontalDragGestures { ch, dx -> ch.consume(); seek(now() - dx / pxPerSec) } }
 
-/* ───────────────────────── Grand staff ───────────────────────── */
-
-/**
- * A grand staff that scrolls past a fixed playhead. Notes are placed by time (not engraved into measures),
- * each with a bar showing how long to hold it. Treble = right hand (from middle C up), bass = left hand.
- */
-@Composable
-fun StaffView(song: Song, notes: List<Note>, now: Double, pxPerSecDp: Float, onSeek: (Double) -> Unit, modifier: Modifier) {
-    val face = musicTypeface()
-    val pxPerSec = with(androidx.compose.ui.platform.LocalDensity.current) { pxPerSecDp.dp.toPx() }
-    val nowState = rememberUpdatedState(now)
-    val maxLen = remember(notes) { notes.maxOfOrNull { it.end - it.start } ?: 0.0 }
-    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
-    val key = song.keySharps
-    Canvas(modifier.scrubX(pxPerSec, { nowState.value }, onSeek)) {
-        val gap = (size.height / 24f).coerceIn(5.dp.toPx(), 15.dp.toPx())
-        val half = gap / 2
-        val staffH = 4 * gap
-        val total = staffH * 2 + 5 * gap
-        val top = (size.height - total) / 2
-        val trebleTop = top; val trebleBottom = top + staffH
-        val bassTop = trebleBottom + 5 * gap; val bassBottom = bassTop + staffH
-        val S = gap / 0.244f // font size where one staff space = gap
-        val keyW = kotlin.math.abs(key) * gap * 1.0f
-        val leftArea = gap * 3.6f + keyW + gap * 0.8f
-        val playX = leftArea + 28.dp.toPx()
-
-        fun yFor(treble: Boolean, d: Int) = if (treble) trebleBottom - (d - 37) * half else bassBottom - (d - 25) * half
-        fun staffLines(x0: Float, x1: Float) {
-            for (i in 0..4) {
-                drawLine(Palette.StaffLine, Offset(x0, trebleTop + i * gap), Offset(x1, trebleTop + i * gap), 1.2f)
-                drawLine(Palette.StaffLine, Offset(x0, bassTop + i * gap), Offset(x1, bassTop + i * gap), 1.2f)
-            }
-        }
-
-        drawRect(Palette.Paper)
-        staffLines(0f, size.width)
-        val t0 = now - (playX - leftArea) / pxPerSec
-        val t1 = now + (size.width - playX) / pxPerSec
-        fun xFor(t: Double) = playX + ((t - now) * pxPerSec).toFloat()
-
-        // Bars and bar numbers
-        paint.typeface = Typeface.DEFAULT; paint.textSize = gap * 1.05f; paint.color = Palette.Muted.toArgb(); paint.textAlign = Paint.Align.LEFT
-        song.bars.forEachIndexed { i, b ->
-            if (b < t0 - 1 || b > t1) return@forEachIndexed
-            val x = xFor(b)
-            drawLine(Palette.StaffLine, Offset(x, trebleTop), Offset(x, bassBottom), 1.2f)
-            drawContext.canvas.nativeCanvas.drawText("${i + 1}", x + 3f, trebleTop - gap * 0.8f, paint)
-        }
-
-        // Notes
-        paint.typeface = face; paint.textSize = S; paint.textAlign = Paint.Align.CENTER
-        val headW = gap * 1.3f; val headH = gap * 0.98f
-        var i = firstVisible(notes, t0, maxLen)
-        while (i < notes.size) {
-            val n = notes[i]; i++
-            if (n.start > t1) break
-            if (n.end < t0) continue
-            val treble = n.pitch >= 60
-            val (d, acc) = Spelling.spell(n.pitch, key)
-            val y = yFor(treble, d)
-            val x = xFor(n.start); val xe = xFor(n.end)
-            val active = now >= n.start && now < n.end
-            val past = n.end <= now
-            val hand = if (treble) Palette.Accent else Palette.Left
-            // hold bar
-            drawRoundRect(hand.copy(alpha = if (active) 0.55f else if (past) 0.12f else 0.28f),
-                Offset(x, y - gap * 0.28f), Size(max(xe - x, headW), gap * 0.56f), CornerRadius(gap * 0.28f))
-            // ledger lines
-            val ledgerColor = Palette.StaffLine
-            if (treble) {
-                var ld = 35; while (ld >= d) { val ly = yFor(true, ld); drawLine(ledgerColor, Offset(x - headW * 0.75f, ly), Offset(x + headW * 0.75f, ly), 1.2f); ld -= 2 }
-                ld = 47; while (ld <= d) { val ly = yFor(true, ld); drawLine(ledgerColor, Offset(x - headW * 0.75f, ly), Offset(x + headW * 0.75f, ly), 1.2f); ld += 2 }
-            } else {
-                var ld = 23; while (ld >= d) { val ly = yFor(false, ld); drawLine(ledgerColor, Offset(x - headW * 0.75f, ly), Offset(x + headW * 0.75f, ly), 1.2f); ld -= 2 }
-                ld = 35; while (ld <= d) { val ly = yFor(false, ld); drawLine(ledgerColor, Offset(x - headW * 0.75f, ly), Offset(x + headW * 0.75f, ly), 1.2f); ld += 2 }
-            }
-            val headColor = when { active -> Palette.Now; past -> hand.copy(alpha = 0.4f); else -> hand }
-            drawOval(headColor, Offset(x - headW / 2, y - headH / 2), Size(headW, headH))
-            val keyAcc = Spelling.keyAccidental(d % 7, key)
-            if (acc != keyAcc) {
-                val glyph = when (acc) { 1 -> "♯"; -1 -> "♭"; else -> "♮" }
-                val lift = when (acc) { -1 -> 0.08f; else -> 0.13f } * S
-                paint.color = headColor.toArgb()
-                drawContext.canvas.nativeCanvas.drawText(glyph, x - headW * 1.05f, y + lift, paint)
-            }
-        }
-
-        drawLine(Palette.Now, Offset(playX, trebleTop - gap * 2), Offset(playX, bassBottom + gap * 2), 2.5f)
-
-        // Fixed left side: clefs and key signature over the scrolling notes
-        drawRect(Palette.Paper, Offset.Zero, Size(leftArea, size.height))
-        staffLines(0f, leftArea)
-        drawLine(Palette.StaffLine, Offset(gap * 0.4f, trebleTop), Offset(gap * 0.4f, bassBottom), 2f)
-        paint.color = Palette.Text1.toArgb(); paint.textAlign = Paint.Align.LEFT
-        val nc = drawContext.canvas.nativeCanvas
-        nc.drawText("𝄞", gap * 0.8f, trebleBottom, paint)
-        nc.drawText("𝄢", gap * 0.8f, bassBottom, paint)
-        val trebleSharps = intArrayOf(45, 42, 46, 43, 40, 44, 41)
-        val trebleFlats = intArrayOf(41, 44, 40, 43, 39, 42, 38)
-        for (k in 0 until kotlin.math.abs(key)) {
-            val td = if (key > 0) trebleSharps[k] else trebleFlats[k]
-            val g = if (key > 0) "♯" else "♭"
-            val lift = (if (key > 0) 0.13f else 0.08f) * S
-            val x = gap * 3.7f + k * gap * 1.0f
-            nc.drawText(g, x, yFor(true, td) + lift, paint)
-            nc.drawText(g, x, yFor(false, td - 14) + lift, paint)
-        }
-    }
-}
-
 /* ───────────────────────── Falling notes ───────────────────────── */
 
 private fun isBlack(p: Int) = (p % 12) in intArrayOf(1, 3, 6, 8, 10)
@@ -201,7 +91,7 @@ fun FallingView(song: Song, notes: List<Note>, now: Double, onSeek: (Double) -> 
     }
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD } }
     val ppsHolder = remember { floatArrayOf(1f) }
-    Canvas(modifier.pointerInput(Unit) { detectVerticalDragGestures { ch, dy -> ch.consume(); onSeek(nowState.value + dy / ppsHolder[0]) } }) {
+    Canvas(modifier.clipToBounds().pointerInput(Unit) { detectVerticalDragGestures { ch, dy -> ch.consume(); onSeek(nowState.value + dy / ppsHolder[0]) } }) {
         val (lo, hi) = range
         val whites = (lo..hi).count { !isBlack(it) }
         val ww = size.width / whites
@@ -309,7 +199,7 @@ fun TabView(song: Song, tab: List<TabNote>, chords: List<Chord>, now: Double, px
     val nowState = rememberUpdatedState(now)
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) } }
     val maxLen = remember(tab) { tab.maxOfOrNull { it.end - it.start } ?: 0.0 }
-    Canvas(modifier.scrubX(pxPerSec, { nowState.value }, onSeek)) {
+    Canvas(modifier.clipToBounds().scrubX(pxPerSec, { nowState.value }, onSeek)) {
         drawRect(Palette.Paper)
         val chordRow = 34.dp.toPx()
         val sp = ((size.height - chordRow - 16.dp.toPx()) / 6f).coerceAtMost(30.dp.toPx())

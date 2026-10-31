@@ -47,7 +47,11 @@ import com.sirveillanceai.mixokeys.ui.ChordDiagram
 import com.sirveillanceai.mixokeys.ui.FallingView
 import com.sirveillanceai.mixokeys.ui.LyricsBar
 import com.sirveillanceai.mixokeys.ui.Palette
-import com.sirveillanceai.mixokeys.ui.StaffView
+import com.sirveillanceai.mixokeys.ui.SheetView
+import com.sirveillanceai.mixokeys.ui.Sheet
+import com.sirveillanceai.mixokeys.notation.Score
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import com.sirveillanceai.mixokeys.ui.TabView
 
 class MainActivity : ComponentActivity() {
@@ -148,7 +152,7 @@ private fun HomeScreen(s: AppState, vm: LibraryViewModel) {
 
 /* ───────────────────────── Lesson ───────────────────────── */
 
-private enum class Mode(val label: String) { Staff("Staff"), Falling("Falling notes"), Guitar("Guitar") }
+private enum class Mode(val label: String) { Sheet("Sheet"), Falling("Falling"), Guitar("Guitar") }
 
 private fun defaultShown(parts: List<Part>): Set<String> {
     val piano = parts.filter { it.isPiano && it.notes.isNotEmpty() }
@@ -158,19 +162,46 @@ private fun defaultShown(parts: List<Part>): Set<String> {
 
 private fun fmt(t: Double): String { val s = t.toInt().coerceAtLeast(0); return "%d:%02d".format(s / 60, s % 60) }
 
+private val MAJOR = mapOf(0 to "C", 1 to "G", 2 to "D", 3 to "A", 4 to "E", 5 to "B", 6 to "F♯", 7 to "C♯", -1 to "F", -2 to "B♭", -3 to "E♭", -4 to "A♭", -5 to "D♭", -6 to "G♭", -7 to "C♭")
+private val MINOR = mapOf(0 to "A", 1 to "E", 2 to "B", 3 to "F♯", 4 to "C♯", 5 to "G♯", 6 to "D♯", 7 to "A♯", -1 to "D", -2 to "G", -3 to "C", -4 to "F", -5 to "B♭", -6 to "E♭", -7 to "A♭")
+
+private fun songInfo(song: Song): String {
+    val ts = song.timeSigs.firstOrNull()?.let { "${it.num}/${it.den}" } ?: "4/4"
+    return "${MAJOR[song.keySharps]} / ${MINOR[song.keySharps]}m · $ts · ${fmt(song.duration)}"
+}
+
+@Composable
+private fun IconBtn(label: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(Modifier.size(44.dp).clickable(onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }
+}
+
+@Composable
+private fun PlayButton(playing: Boolean, size: Int, onClick: () -> Unit) {
+    Box(Modifier.size(size.dp).background(Palette.Accent, CircleShape).clickable(onClickLabel = if (playing) "Pause" else "Play", onClick = onClick),
+        contentAlignment = Alignment.Center) { Text(if (playing) "❚❚" else "▶", color = Palette.OnAccent, fontSize = (size / 3).sp, fontWeight = FontWeight.Bold) }
+}
+
+@Composable
+private fun SmallButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(modifier.heightIn(min = 44.dp).border(1.dp, Color(0xFF33334A), RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center) { Text(text, color = Palette.Text1, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+}
+
 @Composable
 private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
     val context = LocalContext.current
     val parts = remember(song) { song.parts.filter { it.notes.isNotEmpty() } }
-    var mode by rememberSaveable(song) { mutableStateOf(Mode.Staff) }
+    var mode by rememberSaveable(song) { mutableStateOf(Mode.Sheet) }
     var shown by remember(song) { mutableStateOf(defaultShown(parts)) }
     var tabPartId by remember(song) { mutableStateOf(Tab.defaultPart(parts)?.id) }
-    var zoom by remember { mutableFloatStateOf(120f) }
+    var space by rememberSaveable { mutableFloatStateOf(7f) }   // sheet size: dp per staff space
+    var tabZoom by remember { mutableFloatStateOf(120f) }
     var playing by remember { mutableStateOf(false) }
     var now by remember { mutableDoubleStateOf(0.0) }
     var showParts by remember { mutableStateOf(false) }
     var showLyricsMenu by remember { mutableStateOf(false) }
     var tapping by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
 
     val player = remember(song) { MidiPlayer(context, song) { playing = false } }
     DisposableEffect(player) { onDispose { player.release() } }
@@ -178,66 +209,110 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
     LaunchedEffect(player) { while (true) { withFrameNanos { }; now = player.position(); playing = player.playing } }
     BackHandler { if (tapping) tapping = false else vm.close() }
 
-    val shownNotes = remember(song, shown) { parts.filter { it.id in shown }.flatMap { it.notes }.sortedBy { it.start } }
+    val shownParts = remember(song, shown) { parts.filter { it.id in shown } }
+    val shownNotes = remember(shownParts) { shownParts.flatMap { it.notes }.sortedBy { it.start } }
+    val score = remember(shownParts) { if (shownParts.isEmpty()) null else Score.build(song, shownParts) }
     val chords = remember(song) { Chords.recognise(song, parts) }
-    val tabPart = parts.firstOrNull { it.id == tabPartId }
-    val tab = remember(song, tabPartId) { tabPart?.let { Tab.arrange(it.notes) } ?: emptyList() }
+    val tab = remember(song, tabPartId) { parts.firstOrNull { it.id == tabPartId }?.let { Tab.arrange(it.notes) } ?: emptyList() }
     val seek: (Double) -> Unit = { t -> player.seek(t); now = t }
+    val togglePlay = { if (player.playing) player.pause() else player.play(); playing = player.playing }
+    val zoomIn = { if (mode == Mode.Guitar) tabZoom = (tabZoom * 1.25f).coerceAtMost(400f) else space = (space * 1.15f).coerceAtMost(13f) }
+    val zoomOut = { if (mode == Mode.Guitar) tabZoom = (tabZoom / 1.25f).coerceAtLeast(40f) else space = (space / 1.15f).coerceAtLeast(4.5f) }
+    val nextSpeed = { val sp = when (player.speed) { 1.0 -> 0.5; 0.5 -> 0.75; else -> 1.0 }; player.setSpeed(sp); playing = player.playing }
+    val speedLabel = "${(player.speed * 100).toInt()}%"
 
-    Column(Modifier.fillMaxSize()) {
-        // Title row
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = vm::close) { Text("‹", color = Palette.Text1, fontSize = 26.sp) }
-            Column(Modifier.weight(1f)) {
-                Text(song.title, color = Palette.Text1, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${fmt(song.duration)} · ${parts.size} parts · ${lyrics?.source ?: "No lyrics"}", color = Palette.Muted, fontSize = 12.sp, maxLines = 1)
-            }
-            TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
-            TextButton(onClick = { showLyricsMenu = true }) { Text("Lyrics", color = Palette.Accent) }
-        }
-        // Mode chips + zoom
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Mode.entries.forEach { m -> FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label) }) }
-            if (mode != Mode.Falling) {
-                Spacer(Modifier.width(4.dp))
-                OutlinedButton(onClick = { zoom = (zoom / 1.25f).coerceAtLeast(40f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(40.dp)) { Text("−", color = Palette.Text1) }
-                OutlinedButton(onClick = { zoom = (zoom * 1.25f).coerceAtMost(400f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(40.dp)) { Text("+", color = Palette.Text1) }
-            }
-        }
-
-        // The lesson view
-        Box(Modifier.weight(1f).fillMaxWidth().padding(12.dp).background(Palette.Paper, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))) {
+    @Composable
+    fun LessonView(modifier: Modifier) {
+        val sheet = mode == Mode.Sheet
+        Box(modifier.background(if (sheet) Sheet.Paper else Palette.Paper, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))) {
             when (mode) {
-                Mode.Staff -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
-                    StaffView(song, shownNotes, now, zoom, seek, Modifier.fillMaxSize())
+                Mode.Sheet -> if (score == null) Hint("Pick a part to show under Parts.") else
+                    SheetView(score, lyrics, now, space, seek, Modifier.fillMaxSize())
                 Mode.Falling -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
                     FallingView(song, shownNotes, now, seek, Modifier.fillMaxSize())
-                Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, zoom, seek) { tabPartId = it }
+                Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, tabZoom, seek) { tabPartId = it }
             }
         }
+    }
 
-        // Karaoke lyrics
-        if (lyrics != null && lyrics.timed && lyrics.lines.isNotEmpty() && !tapping) LyricsBar(lyrics, now, Modifier.fillMaxWidth())
+    @Composable
+    fun MoreMenu() {
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Parts (show / hear)") }, onClick = { menu = false; showParts = true })
+            DropdownMenuItem(text = { Text("Lyrics") }, onClick = { menu = false; showLyricsMenu = true })
+            DropdownMenuItem(text = { Text("Bigger notes") }, onClick = { zoomIn() })
+            DropdownMenuItem(text = { Text("Smaller notes") }, onClick = { zoomOut() })
+            DropdownMenuItem(text = { Text("Back 5 seconds") }, onClick = { menu = false; seek(now - 5) })
+        }
+    }
+
+    @Composable
+    fun LyricsExtras() {
+        // The sheet shows lyrics under the notes; the other views get a karaoke line.
+        if (lyrics != null && lyrics.timed && lyrics.lines.isNotEmpty() && !tapping && mode != Mode.Sheet) LyricsBar(lyrics, now, Modifier.fillMaxWidth())
         if (lyrics != null && !lyrics.timed && !tapping) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("These lyrics have no timings yet.", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
             TextButton(onClick = { tapping = true }) { Text("Tap to time them", color = Palette.Accent) }
         }
         if (tapping && lyrics != null) TapSync(lyrics, player, onDone = { l -> vm.setLyrics(l); tapping = false }, onCancel = { tapping = false })
+    }
 
-        // Transport
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Box(Modifier.size(52.dp).background(Palette.Accent, CircleShape).clickable { if (player.playing) player.pause() else player.play(); playing = player.playing },
-                contentAlignment = Alignment.Center) { Text(if (playing) "❚❚" else "▶", color = Palette.OnAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
-            Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-            Slider(value = (now / song.duration.coerceAtLeast(0.1)).toFloat().coerceIn(0f, 1f), onValueChange = { seek(it * song.duration) }, modifier = Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Speed", color = Palette.Muted, fontSize = 12.sp)
-            listOf(0.5, 0.75, 1.0).forEach { sp ->
-                FilterChip(selected = player.speed == sp, onClick = { player.setSpeed(sp); playing = player.playing }, label = { Text("${(sp * 100).toInt()}%") })
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        if (landscape) {
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.width(76.dp).fillMaxHeight().padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+                    IconBtn("Back", vm::close) { Text("‹", color = Palette.Text1, fontSize = 26.sp) }
+                    SmallButton(mode.label, Modifier.width(64.dp)) { mode = Mode.entries[(mode.ordinal + 1) % Mode.entries.size] }
+                    PlayButton(playing, 56, togglePlay)
+                    SmallButton(speedLabel, Modifier.width(64.dp)) { nextSpeed() }
+                    Box { IconBtn("More", { menu = true }) { Text("⋮", color = Palette.Text1, fontSize = 22.sp) }; MoreMenu() }
+                }
+                Column(Modifier.weight(1f).fillMaxHeight().padding(top = 6.dp, end = 8.dp, bottom = 2.dp)) {
+                    LessonView(Modifier.weight(1f).fillMaxWidth())
+                    LyricsExtras()
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        Slider(value = (now / song.duration.coerceAtLeast(0.1)).toFloat().coerceIn(0f, 1f), onValueChange = { seek(it * song.duration) }, modifier = Modifier.weight(1f).height(32.dp))
+                        Text(fmt(song.duration), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
             }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { seek(now - 5) }) { Text("−5 s", color = Palette.Text1) }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconBtn("Back", vm::close) { Text("‹", color = Palette.Text1, fontSize = 26.sp) }
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title.replace('_', ' '), color = Palette.Text1, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(songInfo(song), color = Palette.Muted, fontSize = 12.sp, maxLines = 1)
+                    }
+                    TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
+                    TextButton(onClick = { showLyricsMenu = true }) { Text("Lyrics", color = Palette.Accent) }
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).background(Palette.Card, RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Mode.entries.forEach { m ->
+                        val sel = mode == m
+                        Box(Modifier.weight(1f).height(40.dp).background(if (sel) Palette.Text1 else Color.Transparent, RoundedCornerShape(10.dp)).clickable { mode = m },
+                            contentAlignment = Alignment.Center) { Text(m.label, color = if (sel) Palette.Bg else Palette.Muted, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.SemiBold) }
+                    }
+                }
+                LessonView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
+                LyricsExtras()
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Slider(value = (now / song.duration.coerceAtLeast(0.1)).toFloat().coerceIn(0f, 1f), onValueChange = { seek(it * song.duration) }, modifier = Modifier.weight(1f))
+                    Text(fmt(song.duration), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    SmallButton(speedLabel) { nextSpeed() }
+                    IconBtn("Back 5 seconds", { seek(now - 5) }) { Text("↺5", color = Palette.Text1, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                    PlayButton(playing, 64, togglePlay)
+                    SmallButton("−") { zoomOut() }
+                    SmallButton("+") { zoomIn() }
+                }
+            }
         }
     }
 
