@@ -1,15 +1,12 @@
 # Mixokeys — Android (test build)
 
-Turns any song on your phone into piano notes, entirely on the phone.
+Learn songs on piano or guitar from MIDI files, with karaoke lyrics. Everything runs on the phone; nothing is uploaded and no internet is needed.
 
-This first build answers one question: **how fast and how accurate is it on a real phone?**
-
-1. Pick an audio file (or share one to the app from another app).
-2. The piano is separated from the band with **HT-Demucs 6-stem**. Skip this with "Solo piano recording" when the file is piano alone.
-3. The notes are read with the **high-resolution piano transcription** model (Kong et al.), using its original decoding.
-4. You get a piano roll that follows playback (piano part or whole song), the time each step took, and a MIDI file you can share.
-
-The two models (about 235 MB) download once, the first time you use them. After that the app works offline, and songs never leave the phone.
+- **Staff:** a grand staff that scrolls past a playhead. Right hand (middle C and up) on the treble staff, left hand on the bass staff, with a bar showing how long to hold each note.
+- **Falling notes:** notes fall onto a keyboard sized to the song.
+- **Guitar:** the chord at each moment with its fingering, the next chord, and scrolling tab for any part.
+- **Lyrics:** karaoke lyrics that light up word by word. They come from the MIDI file itself (lyric events, or `.kar` karaoke files), from an `.lrc` file, or from plain text that you time by tapping along.
+- **Practice:** 50/75/100 % speed (the MIDI is re-timed, so the sound doesn't warble), mute the part you're playing, drag the staff or tab to move around.
 
 ## Getting the app on your phone
 
@@ -26,18 +23,14 @@ If a build fails, GitHub opens an issue titled "Build failed: …" with the erro
 
 | Path | What it does |
 |---|---|
-| `app/src/main/java/.../audio/AudioDecoder.kt` | Decodes MP3/M4A/WAV/FLAC/OGG with Android's MediaCodec |
-| `.../audio/Resampler.kt` | Band-limited resampling (44.1 kHz for separation, 16 kHz for the piano model) |
-| `.../ml/Separator.kt` | Demucs 6-stem, sliding 7.8 s windows with the original overlap cross-fade |
-| `.../ml/PianoTranscriber.kt` | Piano model over 10 s windows, keeping the middle half of each (as in the reference code) |
-| `.../ml/PianoPostProcess.kt` | Line-for-line port of the reference onset/offset decoding |
-| `.../ml/ModelStore.kt` | One-time model downloads, resumable, with an integrity check |
-| `.../midi/MidiWriter.kt` | MIDI export |
-| `.../Pipeline.kt` | Runs the steps and times them |
+| `app/src/main/java/.../midi/Midi.kt` | MIDI reader (tempo map, parts, lyrics, key and time signatures) and the writer used for slowed-down / muted playback |
+| `.../lyrics/Lyrics.kt` | Lyrics from MIDI/KAR events, LRC (incl. word timings), plain text and tap timing |
+| `.../music/Music.kt` | Note spelling, chord recognition and fingerings, tab placement |
+| `.../ui/Views.kt` | Grand staff, falling notes, chord diagrams, tab and karaoke views |
+| `.../MidiPlayer.kt` | Playback with Android's built-in MIDI synthesizer |
+| `.../Library.kt` | Opening files, recent songs, saved lyrics |
 | `.../MainActivity.kt` | The screens |
 
 ## Credits
 
-- HT-Demucs by Meta AI Research (Défossez et al.), MIT licence. ONNX export: `adowu/htdemucs-6s-onnx`.
-- High-resolution piano transcription by Q. Kong, B. Li, X. Song, Y. Wan and Y. Wang (ByteDance), CC BY 4.0. ONNX conversion: `Clement11800/pianino-model`.
-- ONNX Runtime by Microsoft, MIT licence.
+- Music symbols: Noto Music, SIL Open Font License 1.1.

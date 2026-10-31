@@ -12,8 +12,8 @@ android {
         applicationId = "com.sirveillanceai.mixokeys"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
     }
 
     signingConfigs {
@@ -65,7 +65,4 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-
-    // On-device inference for the separation and piano models
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }

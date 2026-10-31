@@ -1,19 +1,19 @@
 package com.sirveillanceai.mixokeys
 
 import android.content.Intent
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,45 +22,44 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sirveillanceai.mixokeys.ml.Models
-import com.sirveillanceai.mixokeys.ml.Note
-import kotlinx.coroutines.delay
-
-private val Bg = Color(0xFF0B0B10)
-private val Card = Color(0xFF16161E)
-private val Line = Color(0xFF262633)
-private val Text1 = Color(0xFFF1F0F7)
-private val Muted = Color(0xFFA3A1B5)
-private val Accent = Color(0xFFA594FF)
-private val OnAccent = Color(0xFF120E2B)
-private val Ok = Color(0xFF6FE0B8)
-private val Bad = Color(0xFFFF7A7A)
+import com.sirveillanceai.mixokeys.lyrics.Lyrics
+import com.sirveillanceai.mixokeys.midi.Part
+import com.sirveillanceai.mixokeys.midi.Song
+import com.sirveillanceai.mixokeys.music.Chords
+import com.sirveillanceai.mixokeys.music.Tab
+import com.sirveillanceai.mixokeys.ui.ChordDiagram
+import com.sirveillanceai.mixokeys.ui.FallingView
+import com.sirveillanceai.mixokeys.ui.LyricsBar
+import com.sirveillanceai.mixokeys.ui.Palette
+import com.sirveillanceai.mixokeys.ui.StaffView
+import com.sirveillanceai.mixokeys.ui.TabView
 
 class MainActivity : ComponentActivity() {
-    private val vm: PipelineViewModel by viewModels()
+    private val vm: LibraryViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashReport.install(this)
         enableEdgeToEdge()
-        sharedUri(intent)?.let { vm.pick(it) }
+        incoming(intent)?.let { vm.open(it, persist = false) }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = OnAccent, background = Bg, surface = Card)) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Palette.Accent, onPrimary = Palette.OnAccent, background = Palette.Bg, surface = Palette.Card)) {
                 App(vm)
             }
         }
@@ -68,11 +67,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        sharedUri(intent)?.let { vm.pick(it) }
+        incoming(intent)?.let { vm.open(it, persist = false) }
     }
 
-    private fun sharedUri(intent: Intent?): Uri? {
-        if (intent?.action != Intent.ACTION_SEND) return null
+    /** A MIDI file shared to the app, or opened with it from a file manager. */
+    private fun incoming(intent: Intent?): Uri? {
+        if (intent == null) return null
+        if (intent.action == Intent.ACTION_VIEW) return intent.data
+        if (intent.action != Intent.ACTION_SEND) return null
         @Suppress("DEPRECATION")
         return if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
         else intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
@@ -80,215 +82,312 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun App(vm: PipelineViewModel) {
-    val ui by vm.ui.collectAsStateWithLifecycle()
-    LocalView.current.keepScreenOn = ui.running
-    Box(Modifier.fillMaxSize().background(Bg).safeDrawingPadding()) {
-        when {
-            ui.result != null -> ResultScreen(ui.result!!, onBack = vm::reset)
-            ui.running || ui.steps.isNotEmpty() -> WorkScreen(ui, onCancel = vm::cancel, onBack = vm::reset)
-            else -> HomeScreen(ui, vm)
+private fun App(vm: LibraryViewModel) {
+    val s by vm.state.collectAsStateWithLifecycle()
+    Box(Modifier.fillMaxSize().background(Palette.Bg).safeDrawingPadding()) {
+        val song = s.song
+        if (song != null) LessonScreen(song, s.lyrics, vm) else HomeScreen(s, vm)
+        s.error?.let { msg ->
+            AlertDialog(onDismissRequest = vm::dismissError, confirmButton = { TextButton(onClick = vm::dismissError) { Text("OK") } },
+                title = { Text("Something went wrong") }, text = { Text(msg) })
         }
-    }
-}
-
-@Composable
-private fun Title(text: String, sub: String? = null) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text, color = Text1, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        if (sub != null) Text(sub, color = Muted, fontSize = 13.sp)
     }
 }
 
 @Composable
 private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier.fillMaxWidth().background(Card, RoundedCornerShape(16.dp)).border(1.dp, Line, RoundedCornerShape(16.dp)).padding(14.dp),
+        modifier.fillMaxWidth().background(Palette.Card, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp)).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp), content = content,
     )
 }
 
-@Composable
-private fun BigButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(
-        onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
-        shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent),
-    ) { Text(text, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold) }
-}
+private val MIDI_TYPES = arrayOf("audio/midi", "audio/x-midi", "audio/mid", "audio/sp-midi", "application/x-midi", "audio/x-mid", "application/octet-stream", "*/*")
+
+/* ───────────────────────── Home ───────────────────────── */
 
 @Composable
-private fun HomeScreen(ui: UiState, vm: PipelineViewModel) {
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.pick(uri) }
+private fun HomeScreen(s: AppState, vm: LibraryViewModel) {
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.open(uri, persist = true) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Title("Mixokeys", "Test build · piano notes from any song, on this phone")
-        ui.lastCrash?.let { report ->
-            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Mixokeys", color = Palette.Text1, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+            Text("Learn songs on piano or guitar from MIDI files, with karaoke lyrics.", color = Palette.Muted, fontSize = 13.sp)
+        }
+        s.lastCrash?.let { report ->
+            val clip = LocalClipboardManager.current
             Panel {
-                Text("The last run closed unexpectedly", color = Bad, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text(report, color = Text1, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text("The app closed unexpectedly last time", color = Palette.Bad, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(report, color = Palette.Text1, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(report)) }, shape = RoundedCornerShape(12.dp)) { Text("Copy report", color = Text1) }
-                    OutlinedButton(onClick = vm::dismissCrash, shape = RoundedCornerShape(12.dp)) { Text("Dismiss", color = Muted) }
+                    OutlinedButton(onClick = { clip.setText(AnnotatedString(report)) }) { Text("Copy report", color = Palette.Text1) }
+                    OutlinedButton(onClick = vm::dismissCrash) { Text("Dismiss", color = Palette.Muted) }
                 }
             }
         }
-        Panel {
-            Text("Song", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Text(ui.pickedName ?: "No song picked yet", color = Text1, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            OutlinedButton(onClick = { picker.launch(arrayOf("audio/*")) }, shape = RoundedCornerShape(12.dp), modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(if (ui.pickedUri == null) "Pick an audio file" else "Pick a different file", color = Text1)
-            }
-        }
-        Panel {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Solo piano recording", color = Text1, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text("Turn on only if the file is piano alone. Otherwise the piano is separated from the band first, which is the most accurate.", color = Muted, fontSize = 12.5.sp)
-                }
-                Switch(checked = ui.soloPiano, onCheckedChange = vm::setSolo)
-            }
-        }
-        Panel {
-            Text("Listening models", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Models.ALL.forEach { m ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(m.title, color = Text1, fontSize = 14.sp)
-                        Text("%.0f MB".format(m.approxBytes / 1e6), color = Muted, fontSize = 12.sp)
-                    }
-                    val ready = ui.modelsReady[m.id] == true
-                    Text(if (ready) "On this phone" else "Downloads on first use", color = if (ready) Ok else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Button(
+            onClick = { picker.launch(MIDI_TYPES) }, enabled = !s.loading,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Palette.Accent, contentColor = Palette.OnAccent),
+        ) { Text(if (s.loading) "Opening…" else "Open a MIDI file", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold) }
+        Text(".mid, .midi and .kar files. Karaoke files (.kar) bring their lyrics with them; for other songs you can add lyrics afterwards.",
+            color = Palette.Muted, fontSize = 12.5.sp)
+        if (s.recent.isNotEmpty()) Panel {
+            Text("Recent", color = Palette.Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            s.recent.forEach { r ->
+                Row(Modifier.fillMaxWidth().clickable { vm.open(Uri.parse(r.uri), persist = false) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("♪", color = Palette.Accent, fontSize = 18.sp, modifier = Modifier.width(28.dp))
+                    Text(r.name, color = Palette.Text1, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text("✕", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.clickable { vm.forget(r) }.padding(8.dp))
                 }
             }
-            Text("About 235 MB, downloaded once over the internet (Wi-Fi recommended). Songs are never uploaded.", color = Muted, fontSize = 12.sp)
         }
-        BigButton("Read the piano notes", enabled = ui.pickedUri != null) { vm.start() }
-        Credits()
+        Text("Music symbols: Noto Music (SIL Open Font License). Sound: Android's built-in MIDI synthesizer.", color = Palette.Muted, fontSize = 11.sp)
     }
 }
 
-@Composable
-private fun Credits() {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Credits", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Models.ALL.forEach { Text(it.credit, color = Muted, fontSize = 11.sp) }
-        Text("ONNX Runtime by Microsoft, MIT licence.", color = Muted, fontSize = 11.sp)
-    }
+/* ───────────────────────── Lesson ───────────────────────── */
+
+private enum class Mode(val label: String) { Staff("Staff"), Falling("Falling notes"), Guitar("Guitar") }
+
+private fun defaultShown(parts: List<Part>): Set<String> {
+    val piano = parts.filter { it.isPiano && it.notes.isNotEmpty() }
+    if (piano.isNotEmpty()) return piano.map { it.id }.toSet()
+    return listOfNotNull(Tab.defaultPart(parts)?.id).toSet()
 }
 
-@Composable
-private fun WorkScreen(ui: UiState, onCancel: () -> Unit, onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Title(if (ui.running) "Working…" else if (ui.error != null) "Stopped" else "Done", ui.pickedName)
-        Panel {
-            ui.steps.forEachIndexed { i, s ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    val (bg, fg, mark) = when (s.state) {
-                        StepState.Done -> Triple(Color(0xFF183229), Ok, "✓")
-                        StepState.Running -> Triple(Color(0xFF2A2640), Accent, "${i + 1}")
-                        StepState.Failed -> Triple(Color(0xFF3A1A1A), Bad, "!")
-                        else -> Triple(Color(0xFF1E1E28), Muted, "${i + 1}")
-                    }
-                    Box(Modifier.size(28.dp).background(bg, CircleShape), contentAlignment = Alignment.Center) { Text(mark, color = fg, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(s.label, color = Text1, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        if (s.state == StepState.Running) LinearProgressIndicator(progress = { s.progress }, modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Line)
-                        s.detail?.let { Text(it, color = Muted, fontSize = 12.sp) }
-                    }
-                    s.seconds?.let { Text(fmtSecs(it), color = Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
-                }
-            }
-        }
-        ui.error?.let { Panel { Text(it, color = Bad, fontSize = 14.sp) } }
-        if (ui.running) OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) { Text("Stop", color = Text1) }
-        else BigButton("Back") { onBack() }
-    }
-}
-
-private fun fmtSecs(s: Double) = if (s < 60) "%.1f s".format(s) else "%d:%02d".format((s / 60).toInt(), (s % 60).toInt())
+private fun fmt(t: Double): String { val s = t.toInt().coerceAtLeast(0); return "%d:%02d".format(s / 60, s % 60) }
 
 @Composable
-private fun ResultScreen(r: Result, onBack: () -> Unit) {
+private fun LessonScreen(song: Song, lyrics: Lyrics?, vm: LibraryViewModel) {
     val context = LocalContext.current
-    var source by remember { mutableStateOf(if (r.pianoStem != null) "piano" else "song") }
+    val parts = remember(song) { song.parts.filter { it.notes.isNotEmpty() } }
+    var mode by rememberSaveable(song) { mutableStateOf(Mode.Staff) }
+    var shown by remember(song) { mutableStateOf(defaultShown(parts)) }
+    var tabPartId by remember(song) { mutableStateOf(Tab.defaultPart(parts)?.id) }
+    var zoom by remember { mutableFloatStateOf(120f) }
     var playing by remember { mutableStateOf(false) }
-    var positionMs by remember { mutableIntStateOf(0) }
-    val player = remember(source) {
-        MediaPlayer().apply {
-            if (source == "piano" && r.pianoStem != null) setDataSource(r.pianoStem.absolutePath) else setDataSource(context, r.sourceUri)
-            prepare()
-            setOnCompletionListener { playing = false }
-        }
-    }
-    DisposableEffect(player) { onDispose { player.release() } }
-    LaunchedEffect(player, playing) {
-        if (playing) { player.start(); while (playing) { positionMs = player.currentPosition; delay(30) } } else if (player.isPlaying) player.pause()
-    }
+    var now by remember { mutableDoubleStateOf(0.0) }
+    var showParts by remember { mutableStateOf(false) }
+    var showLyricsMenu by remember { mutableStateOf(false) }
+    var tapping by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Title(r.title.substringBeforeLast('.'), "%d piano notes · %s long".format(r.notes.size, fmtSecs(r.songSeconds)))
-        PianoRoll(r.notes, r.songSeconds, positionMs / 1000.0, Modifier.weight(1f).fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (r.pianoStem != null) {
-                FilterChip(selected = source == "piano", onClick = { playing = false; source = "piano" }, label = { Text("Piano part") })
-                FilterChip(selected = source == "song", onClick = { playing = false; source = "song" }, label = { Text("Whole song") })
+    val player = remember(song) { MidiPlayer(context, song) { playing = false } }
+    DisposableEffect(player) { onDispose { player.release() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { player.pause(); playing = false }
+    LaunchedEffect(player) { while (true) { withFrameNanos { }; now = player.position(); playing = player.playing } }
+    BackHandler { if (tapping) tapping = false else vm.close() }
+
+    val shownNotes = remember(song, shown) { parts.filter { it.id in shown }.flatMap { it.notes }.sortedBy { it.start } }
+    val chords = remember(song) { Chords.recognise(song, parts) }
+    val tabPart = parts.firstOrNull { it.id == tabPartId }
+    val tab = remember(song, tabPartId) { tabPart?.let { Tab.arrange(it.notes) } ?: emptyList() }
+    val seek: (Double) -> Unit = { t -> player.seek(t); now = t }
+
+    Column(Modifier.fillMaxSize()) {
+        // Title row
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = vm::close) { Text("‹", color = Palette.Text1, fontSize = 26.sp) }
+            Column(Modifier.weight(1f)) {
+                Text(song.title, color = Palette.Text1, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${fmt(song.duration)} · ${parts.size} parts · ${lyrics?.source ?: "No lyrics"}", color = Palette.Muted, fontSize = 12.sp, maxLines = 1)
+            }
+            TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
+            TextButton(onClick = { showLyricsMenu = true }) { Text("Lyrics", color = Palette.Accent) }
+        }
+        // Mode chips + zoom
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Mode.entries.forEach { m -> FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label) }) }
+            if (mode != Mode.Falling) {
+                Spacer(Modifier.width(4.dp))
+                OutlinedButton(onClick = { zoom = (zoom / 1.25f).coerceAtLeast(40f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(40.dp)) { Text("−", color = Palette.Text1) }
+                OutlinedButton(onClick = { zoom = (zoom * 1.25f).coerceAtMost(400f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(40.dp)) { Text("+", color = Palette.Text1) }
+            }
+        }
+
+        // The lesson view
+        Box(Modifier.weight(1f).fillMaxWidth().padding(12.dp).background(Palette.Paper, RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))) {
+            when (mode) {
+                Mode.Staff -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
+                    StaffView(song, shownNotes, now, zoom, seek, Modifier.fillMaxSize())
+                Mode.Falling -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
+                    FallingView(song, shownNotes, now, seek, Modifier.fillMaxSize())
+                Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, zoom, seek) { tabPartId = it }
+            }
+        }
+
+        // Karaoke lyrics
+        if (lyrics != null && lyrics.timed && lyrics.lines.isNotEmpty() && !tapping) LyricsBar(lyrics, now, Modifier.fillMaxWidth())
+        if (lyrics != null && !lyrics.timed && !tapping) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("These lyrics have no timings yet.", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = { tapping = true }) { Text("Tap to time them", color = Palette.Accent) }
+        }
+        if (tapping && lyrics != null) TapSync(lyrics, player, onDone = { l -> vm.setLyrics(l); tapping = false }, onCancel = { tapping = false })
+
+        // Transport
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.size(52.dp).background(Palette.Accent, CircleShape).clickable { if (player.playing) player.pause() else player.play(); playing = player.playing },
+                contentAlignment = Alignment.Center) { Text(if (playing) "❚❚" else "▶", color = Palette.OnAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+            Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            Slider(value = (now / song.duration.coerceAtLeast(0.1)).toFloat().coerceIn(0f, 1f), onValueChange = { seek(it * song.duration) }, modifier = Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Speed", color = Palette.Muted, fontSize = 12.sp)
+            listOf(0.5, 0.75, 1.0).forEach { sp ->
+                FilterChip(selected = player.speed == sp, onClick = { player.setSpeed(sp); playing = player.playing }, label = { Text("${(sp * 100).toInt()}%") })
             }
             Spacer(Modifier.weight(1f))
-            Box(
-                Modifier.size(56.dp).background(Accent, CircleShape).border(0.dp, Accent, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                TextButton(onClick = { playing = !playing }) { Text(if (playing) "❚❚" else "▶", color = OnAccent, fontSize = 18.sp) }
+            TextButton(onClick = { seek(now - 5) }) { Text("−5 s", color = Palette.Text1) }
+        }
+    }
+
+    if (showParts) PartsDialog(parts, shown, player.muted, { shown = it }, { player.setMuted(it) }) { showParts = false }
+    if (showLyricsMenu) LyricsMenu(lyrics, vm, onTap = { tapping = true }) { showLyricsMenu = false }
+}
+
+@Composable
+private fun BoxScope.Hint(text: String) {
+    Text(text, color = Palette.Muted, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+}
+
+@Composable
+private fun GuitarPane(
+    song: Song, parts: List<Part>, chords: List<com.sirveillanceai.mixokeys.music.Chord>, tab: List<com.sirveillanceai.mixokeys.music.TabNote>,
+    tabPartId: String?, now: Double, zoom: Float, seek: (Double) -> Unit, onPart: (String) -> Unit,
+) {
+    val ci = chords.indexOfLast { it.start <= now + 0.02 }
+    val cur = chords.getOrNull(ci)?.takeIf { now < it.end + 0.5 }
+    val next = chords.getOrNull(if (cur == null) chords.indexOfFirst { it.start > now } else ci + 1)
+    var menu by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().height(150.dp).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChordDiagram(cur, song.keySharps, big = true, modifier = Modifier.weight(1.3f).fillMaxHeight())
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                Text("Next", color = Palette.Muted, fontSize = 11.sp)
+                ChordDiagram(next, song.keySharps, big = false, modifier = Modifier.fillMaxWidth().weight(1f))
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                val uri = FileProvider.getUriForFile(context, context.packageName + ".files", r.midiFile)
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                    type = "audio/midi"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }, "Share MIDI"))
-            }, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Share MIDI", color = Text1) }
-            OutlinedButton(onClick = { player.release(); onBack() }, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("New song", color = Text1) }
+        Box(Modifier.padding(horizontal = 8.dp)) {
+            TextButton(onClick = { menu = true }) {
+                Text("Tab: " + (parts.firstOrNull { it.id == tabPartId }?.label ?: "pick a part") + "  ▾", color = Palette.Accent, fontSize = 13.sp)
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                parts.filter { !it.isDrums }.forEach { p ->
+                    DropdownMenuItem(text = { Text("${p.label} · ${p.notes.size} notes") }, onClick = { onPart(p.id); menu = false })
+                }
+            }
         }
+        if (tab.isEmpty() && chords.isEmpty()) Box(Modifier.fillMaxSize()) { Hint("No notes to show for guitar.") }
+        else TabView(song, tab, chords, now, zoom, seek, Modifier.fillMaxWidth().weight(1f))
     }
 }
 
-/** Notes over time, scrolling to follow playback. Low notes at the bottom, like a piano roll. */
 @Composable
-private fun PianoRoll(notes: List<Note>, seconds: Double, now: Double, modifier: Modifier) {
-    val pxPerSec = 90f
-    val density = LocalDensity.current
-    val scroll = rememberScrollState()
-    val lo = (notes.minOfOrNull { it.pitch } ?: 48) - 2
-    val hi = (notes.maxOfOrNull { it.pitch } ?: 84) + 2
-    val widthDp = with(density) { (seconds.toFloat() * pxPerSec + 400f).toDp() }
-    LaunchedEffect(now) {
-        val target = (now * pxPerSec).toInt() - 120
-        if (target > 0 && kotlin.math.abs(scroll.value - target) > 4) scroll.scrollTo(target.coerceAtMost(scroll.maxValue))
+private fun PartsDialog(parts: List<Part>, shown: Set<String>, muted: Set<String>, onShown: (Set<String>) -> Unit, onMuted: (Set<String>) -> Unit, onDismiss: () -> Unit) {
+    var sh by remember { mutableStateOf(shown) }
+    var mu by remember { mutableStateOf(muted) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = { onShown(sh); if (mu != muted) onMuted(mu); onDismiss() }) { Text("Done") } },
+        title = { Text("Parts") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Show = draw on the staff and falling notes. Sound = hear it (turn off the part you're playing).", color = Palette.Muted, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                parts.forEach { p ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(p.label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${p.notes.size} notes", color = Palette.Muted, fontSize = 11.sp)
+                        }
+                        if (!p.isDrums) Checkbox(checked = p.id in sh, onCheckedChange = { sh = if (it) sh + p.id else sh - p.id })
+                        Switch(checked = p.id !in mu, onCheckedChange = { mu = if (it) mu - p.id else mu + p.id })
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun LyricsMenu(lyrics: Lyrics?, vm: LibraryViewModel, onTap: () -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var pasting by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) { vm.loadLyrics(uri); onDismiss() } }
+    if (pasting) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            confirmButton = { TextButton(onClick = { vm.useLyricsText(text); onDismiss() }, enabled = text.isNotBlank()) { Text("Use these lyrics") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+            title = { Text("Paste lyrics") },
+            text = {
+                Column {
+                    Text("Plain lyrics (one line per line) — you'll time them by tapping along. Or paste LRC text with [00:12.34] timings.", color = Palette.Muted, fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 320.dp))
+                }
+            },
+        )
+        return
     }
-    Box(modifier.background(Color(0xFF111119), RoundedCornerShape(16.dp)).border(1.dp, Line, RoundedCornerShape(16.dp)).horizontalScroll(scroll)) {
-        Canvas(Modifier.width(widthDp).fillMaxHeight()) {
-            val rows = (hi - lo + 1).coerceAtLeast(1)
-            val rowH = size.height / rows
-            for (p in lo..hi) {
-                if (p % 12 == 0) drawRect(Color(0xFF1E1E2A), Offset(0f, (hi - p) * rowH), Size(size.width, rowH))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("Lyrics") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(lyrics?.let { "Now using: ${it.source}" + if (it.timed) " · ${it.lines.size} lines" else " (not timed yet)" } ?: "This song has no lyrics yet.",
+                    color = Palette.Muted, fontSize = 13.sp)
+                MenuItem("Open an .lrc or .txt file") { picker.launch(arrayOf("*/*")) }
+                MenuItem("Paste lyrics") { pasting = true }
+                if (lyrics != null && (lyrics.lines.isNotEmpty() || lyrics.untimedLines.isNotEmpty())) MenuItem("Time them by tapping along") {
+                    if (lyrics.timed) vm.setLyrics(Lyrics.untimed(lyrics.lines.joinToString("\n") { it.text.trim() }, "Your lyrics"))
+                    onTap(); onDismiss()
+                }
+                if (lyrics?.timed == true) MenuItem("Share as .lrc") {
+                    vm.lrcExport()?.let { f ->
+                        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)
+                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }, "Share lyrics"))
+                    }
+                    onDismiss()
+                }
+                MenuItem("Use the lyrics inside the MIDI file") { vm.resetLyrics(); onDismiss() }
             }
-            var sec = 0
-            while (sec < seconds + 4) {
-                drawRect(Color(0xFF1C1C26), Offset(sec * pxPerSec, 0f), Size(1f, size.height)); sec += 1
-            }
-            for (n in notes) {
-                val x = (n.start * pxPerSec).toFloat()
-                val w = ((n.end - n.start) * pxPerSec).toFloat().coerceAtLeast(3f)
-                val y = (hi - n.pitch) * rowH
-                val sounding = now >= n.start && now < n.end
-                val a = 0.45f + 0.55f * (n.velocity / 127f)
-                drawRoundRect(
-                    color = if (sounding) Color(0xFFF0A43A) else Accent.copy(alpha = a),
-                    topLeft = Offset(x, y + 1f), size = Size(w, (rowH - 2f).coerceAtLeast(2f)), cornerRadius = CornerRadius(3f, 3f),
-                )
-            }
-            drawRect(Color(0xFFF0A43A), Offset((now * pxPerSec).toFloat(), 0f), Size(2f, size.height))
+        },
+    )
+}
+
+@Composable
+private fun MenuItem(text: String, onClick: () -> Unit) {
+    Text(text, color = Palette.Text1, fontSize = 15.sp, modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp))
+}
+
+/** Time plain lyrics: play the song and tap as each line starts. */
+@Composable
+private fun TapSync(lyrics: Lyrics, player: MidiPlayer, onDone: (Lyrics) -> Unit, onCancel: () -> Unit) {
+    val lines = lyrics.untimedLines
+    val taps = remember { mutableStateListOf<Double>() }
+    Panel(Modifier.padding(horizontal = 12.dp)) {
+        Text("Play the song and tap as each line starts.", color = Palette.Muted, fontSize = 12.sp)
+        Text(lines.getOrNull(taps.size) ?: "All lines timed.", color = Palette.Text1, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
+        lines.getOrNull(taps.size + 1)?.let { Text(it, color = Palette.Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = {
+                    if (!player.playing) player.play()
+                    if (taps.size < lines.size) taps += player.position()
+                    if (taps.size == lines.size) onDone(Lyrics.fromTaps(lines, taps.toList(), Double.MAX_VALUE))
+                },
+                modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Palette.Accent, contentColor = Palette.OnAccent),
+            ) { Text(if (taps.isEmpty() && !player.playing) "Play and tap line 1" else "TAP  (${taps.size + 1}/${lines.size})", fontWeight = FontWeight.ExtraBold) }
+            OutlinedButton(onClick = { if (taps.isNotEmpty()) { taps.removeAt(taps.size - 1); player.seek((taps.lastOrNull() ?: 0.0)) } }) { Text("Undo", color = Palette.Text1) }
+            TextButton(onClick = {
+                if (taps.isNotEmpty()) onDone(Lyrics.fromTaps(lines.take(taps.size), taps.toList(), Double.MAX_VALUE)) else onCancel()
+            }) { Text(if (taps.isEmpty()) "Cancel" else "Save", color = Palette.Muted) }
         }
     }
 }
