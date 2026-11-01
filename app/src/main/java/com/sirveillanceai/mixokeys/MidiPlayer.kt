@@ -52,8 +52,16 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
             lastCheck = now
             val real = p.currentPosition / 1000.0 * speed
             if (abs(real - est) > 0.08) { anchorSong = real; anchorNanos = now; return real }
+            // small differences: ease the clock toward the synthesizer so it never jumps
+            anchorSong += (real - est) * 0.15
         }
         return est.coerceAtMost(song.duration)
+    }
+
+    /** Song time at [nanos] (System.nanoTime base), e.g. when a key was pressed. */
+    fun positionAt(nanos: Long): Double {
+        if (!playing) return anchorSong
+        return (anchorSong + (nanos - anchorNanos) / 1e9 * speed).coerceIn(0.0, song.duration)
     }
 
     fun play() {

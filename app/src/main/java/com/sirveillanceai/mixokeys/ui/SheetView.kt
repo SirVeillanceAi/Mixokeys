@@ -41,6 +41,7 @@ import com.sirveillanceai.mixokeys.notation.Score
 import com.sirveillanceai.mixokeys.notation.SystemLayout
 import com.sirveillanceai.mixokeys.notation.TextEl
 import com.sirveillanceai.mixokeys.notation.TieEl
+import com.sirveillanceai.mixokeys.practice.Grade
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -58,7 +59,8 @@ private class Painters(music: Typeface) {
  * playhead, or pages that turn by themselves. Tap to jump; drag (scroll) or swipe (pages) to move.
  */
 @Composable
-fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: Float, staves: List<Int>, onSeek: (Double) -> Unit, modifier: Modifier) {
+fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: Float, staves: List<Int>, onSeek: (Double) -> Unit, modifier: Modifier,
+              marks: Map<Long, Grade> = emptyMap(), flash: Boolean = false) {
     val ctx = LocalContext.current
     val music = remember { ResourcesCompat.getFont(ctx, R.font.noto_music) ?: Typeface.DEFAULT }
     val p = remember { Painters(music) }
@@ -106,7 +108,8 @@ fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: F
                 val top = (size.height - sys.height * g) / 2f - sys.top * g
                 val ox = playX - sys.xAt(t) * g
                 val visL = -ox / g - 4f; val visR = (size.width - ox) / g + 4f
-                drawEls(sys, skin, p, g, ox, top, t, sys.headerEnd until sys.els.size, visL, visR)
+                drawEls(sys, skin, p, g, ox, top, t, sys.headerEnd until sys.els.size, visL, visR, marks = marks)
+                if (flash) drawRect(Color(0x33FF3B3B), Offset(playX - 1.6f * g, 0f), Size(3.2f * g, size.height))
                 // playhead
                 drawLine(skin.now, Offset(playX, top + (-2f) * g), Offset(playX, top + (sys.staffBottom + 2f) * g), 2.5f)
                 drawLyrics(lyrics, sys, skin, p, g, ox, top, t, density.density)
@@ -155,9 +158,10 @@ fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: F
                     val current = t >= s.start && t < s.end
                     if (current) {
                         val cx = margin + s.xAt(t) * g
+                        if (flash) drawRect(Color(0x33FF3B3B), Offset(cx - 1.6f * g, top - 2f * g), Size(3.2f * g, (s.staffBottom + 4f) * g))
                         drawRect(skin.now.copy(alpha = 0.10f), Offset(cx - 1.2f * g, top - 1.5f * g), Size(2.4f * g, (s.staffBottom + 3f) * g))
                     }
-                    drawEls(s, skin, p, g, margin, top, t, s.els.indices, -1e9f, 1e9f)
+                    drawEls(s, skin, p, g, margin, top, t, s.els.indices, -1e9f, 1e9f, marks = marks)
                     if (current) {
                         val cx = margin + s.xAt(t) * g
                         drawLine(skin.now, Offset(cx, top - 1.5f * g), Offset(cx, top + (s.staffBottom + 1.5f) * g), 2.5f)
@@ -171,7 +175,9 @@ fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: F
     }
 }
 
-private fun DrawScope.drawEls(s: SystemLayout, skin: Skin, p: Painters, g: Float, ox: Float, top: Float, t: Double, range: IntRange, visL: Float, visR: Float, alpha: Float = 1f) {
+private fun DrawScope.drawEls(s: SystemLayout, skin: Skin, p: Painters, g: Float, ox: Float, top: Float, t: Double, range: IntRange, visL: Float, visR: Float, alpha: Float = 1f, marks: Map<Long, Grade> = emptyMap()) {
+    val right = if (skin.darkCard) Color(0xFF49D6A0) else Color(0xFF1E9E6A)
+    val missed = if (skin.darkCard) Color(0xFFFF7A7A) else Color(0xFFD64545)
     val nc = drawContext.canvas.nativeCanvas
     fun X(v: Float) = ox + v * g
     fun Y(v: Float) = top + v * g
@@ -184,7 +190,11 @@ private fun DrawScope.drawEls(s: SystemLayout, skin: Skin, p: Painters, g: Float
         val c = (if (lit) skin.now else skin.ink).copy(alpha = alpha)
         when (e) {
             is LineEl -> drawLine(if (e.w <= 0.1f && !lit) skin.lines.copy(alpha = skin.lines.alpha * alpha) else c, Offset(X(e.x1), Y(e.y1)), Offset(X(e.x2), Y(e.y2)), max(1f, e.w * g))
-            is GlyphEl -> { p.glyph.color = c.toArgb(); nc.drawText(e.text, X(e.x), Y(e.y), p.glyph) }
+            is GlyphEl -> {
+                val m = if (e.key >= 0) marks[e.key] else null
+                p.glyph.color = (when (m) { null -> c; Grade.Missed -> missed; else -> right }).toArgb()
+                nc.drawText(e.text, X(e.x), Y(e.y), p.glyph)
+            }
             is BeamEl -> drawPath(Path().apply { moveTo(X(e.x1), Y(e.y1)); lineTo(X(e.x2), Y(e.y2)); lineTo(X(e.x2), Y(e.y2 + e.t)); lineTo(X(e.x1), Y(e.y1 + e.t)); close() }, skin.ink)
             is TieEl -> {
                 val d = if (e.above) -0.7f else 0.7f

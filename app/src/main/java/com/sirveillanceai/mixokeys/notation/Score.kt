@@ -48,7 +48,9 @@ class Measure(val index: Int, val start: Int, val len: Int, val num: Int, val de
     val beat get() = if (den == 8 && num % 3 == 0) 6 else 16 / den
 }
 
-class Score(val song: Song, val measures: List<Measure>, val key: Int, private val unitToSec: (Double) -> Double) {
+class Score(val song: Song, val measures: List<Measure>, val key: Int, private val unitToSec: (Double) -> Double,
+            /** Identifies a note's head on the sheet (grid position * 128 + pitch), for marking it right or wrong. */
+            val unitKey: (com.sirveillanceai.mixokeys.midi.Note) -> Long) {
     fun timeOf(measure: Measure, pos: Double) = unitToSec(measure.start + pos)
 
     companion object {
@@ -139,7 +141,7 @@ class Score(val song: Song, val measures: List<Measure>, val key: Int, private v
                 }
             }
             for (m in measures) m.events.sortWith(compareBy({ it.pos }, { it.staff }))
-            return Score(song, measures, song.keySharps, toSec)
+            return Score(song, measures, song.keySharps, toSec) { n -> unitOf(n.startTick, n.start).toLong() * 128 + n.pitch }
         }
 
         private val NOTE_VALUES = listOf(intArrayOf(16, 16, 0), intArrayOf(12, 8, 1), intArrayOf(8, 8, 0), intArrayOf(6, 4, 1),
@@ -183,7 +185,7 @@ class Score(val song: Song, val measures: List<Measure>, val key: Int, private v
 sealed class El { open val on: Double = -1.0; open val off: Double = -1.0 }
 class LineEl(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val w: Float, override val on: Double = -1.0, override val off: Double = -1.0) : El()
 /** A music-font glyph; [x] is the left of the glyph's box and [y] its baseline, both in staff spaces. */
-class GlyphEl(val text: String, val x: Float, val y: Float, override val on: Double = -1.0, override val off: Double = -1.0) : El()
+class GlyphEl(val text: String, val x: Float, val y: Float, override val on: Double = -1.0, override val off: Double = -1.0, val key: Long = -1) : El()
 class BeamEl(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val t: Float, override val on: Double, override val off: Double) : El()
 class TieEl(val x1: Float, val x2: Float, val y: Float, val above: Boolean) : El()
 class DotEl(val x: Float, val y: Float, override val on: Double, override val off: Double) : El()
@@ -400,7 +402,7 @@ object Engraver {
                     val avg = ev.heads.map { yOf(staff, it.step) }.average().toFloat()
                     ev.stemUp = avg > middle(staff)
                 }
-                heads(els, ev, staff, on, off)
+                heads(els, m, ev, staff, on, off)
                 if (ev.base < 16 && ev !in inBeam) {
                     val (sx, y1, y2) = stem(ev, staff, 3.5f)
                     els += LineEl(sx, y1, sx, y2, 0.12f, on, off)
@@ -424,7 +426,7 @@ object Engraver {
         }
     }
 
-    private fun heads(els: MutableList<El>, ev: Ev, staff: Int, on: Double, off: Double) {
+    private fun heads(els: MutableList<El>, m: Measure, ev: Ev, staff: Int, on: Double, off: Double) {
         val glyph = when { ev.base >= 16 -> WHOLE; ev.base >= 8 -> HEAD_VOID; else -> HEAD_BLACK }
         val hw = if (ev.base >= 16) 1.7f else HEAD_W
         val steps = ev.heads.map { it.step }.sorted()
@@ -437,7 +439,7 @@ object Engraver {
             val y = yOf(staff, h.step)
             val dx = if (h.step in displaced) (if (ev.stemUp) HEAD_W - 0.12f else -(HEAD_W - 0.12f)) else 0f
             val cx = ev.x + dx
-            els += GlyphEl(glyph, cx - hw / 2 - LSB, y + 0.55f, on, off)
+            els += GlyphEl(glyph, cx - hw / 2 - LSB, y + 0.55f, on, off, if (h.tieIn) -1L else (m.start + ev.pos).toLong() * 128 + h.pitch)
             if (names) els += NameEl(LETTER[((h.step % 7) + 7) % 7].toString(), cx, y, on, off)
             // ledger lines
             val bottomStep = if (staff == 0) 37 else 25

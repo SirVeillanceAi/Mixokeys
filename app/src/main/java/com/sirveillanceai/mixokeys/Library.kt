@@ -10,6 +10,11 @@ import com.sirveillanceai.mixokeys.lyrics.Lyrics
 import com.sirveillanceai.mixokeys.midi.Midi
 import com.sirveillanceai.mixokeys.midi.Song
 import com.sirveillanceai.mixokeys.ui.Skin
+import com.sirveillanceai.mixokeys.input.MidiKeyboard
+import com.sirveillanceai.mixokeys.practice.Strictness
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +51,12 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun saveRecent(list: List<Recent>) = prefs.edit().putString("recent", list.joinToString("\n") { "${it.uri}\t${it.name}" }).apply()
+
+    /** The connected MIDI keyboard (USB or Bluetooth); stays connected across songs. */
+    val keyboard = MidiKeyboard(app).also { it.start() }
+    val practice = PracticePrefs(app)
+
+    override fun onCleared() { keyboard.stop() }
 
     fun setSkin(k: Skin) { prefs.edit().putString("skin", k.name).apply(); _s.update { it.copy(skin = k) } }
     fun openSettings(open: Boolean) = _s.update { it.copy(settingsOpen = open) }
@@ -139,4 +150,22 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         val dir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
         return File(dir, (st.song?.title ?: "lyrics").replace(Regex("[^\\w\\- ]+"), "_") + ".lrc").also { it.writeText(l.toLrc()) }
     }
+}
+
+/** Keyboard practice settings, remembered between launches. */
+class PracticePrefs(app: Application) {
+    private val p = app.getSharedPreferences("practice", 0)
+    var enabled by mutableStateOf(p.getBoolean("enabled", true)); private set
+    var waitMode by mutableStateOf(p.getBoolean("wait", true)); private set
+    var strictness by mutableStateOf(runCatching { Strictness.valueOf(p.getString("strict", "Normal")!!) }.getOrDefault(Strictness.Normal)); private set
+    var muteMine by mutableStateOf(p.getBoolean("muteMine", true)); private set
+    /** Measured delay between the phone's sound and your key presses, in seconds. */
+    var latency by mutableStateOf(p.getFloat("latency", 0.08f).toDouble()); private set
+    var calibrated by mutableStateOf(p.contains("latency")); private set
+
+    fun setEnabled(v: Boolean) { enabled = v; p.edit().putBoolean("enabled", v).apply() }
+    fun setWait(v: Boolean) { waitMode = v; p.edit().putBoolean("wait", v).apply() }
+    fun setStrict(v: Strictness) { strictness = v; p.edit().putString("strict", v.name).apply() }
+    fun setMuteMine(v: Boolean) { muteMine = v; p.edit().putBoolean("muteMine", v).apply() }
+    fun setLatency(v: Double) { latency = v; calibrated = true; p.edit().putFloat("latency", v.toFloat()).apply() }
 }

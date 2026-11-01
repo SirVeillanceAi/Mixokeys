@@ -53,6 +53,10 @@ import com.sirveillanceai.mixokeys.notation.Score
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.sirveillanceai.mixokeys.ui.TabView
+import com.sirveillanceai.mixokeys.ui.KeyboardDialog
+import com.sirveillanceai.mixokeys.ui.KeyStrip
+import com.sirveillanceai.mixokeys.practice.Practice
+import com.sirveillanceai.mixokeys.music.Spelling
 
 class MainActivity : ComponentActivity() {
     private val vm: LibraryViewModel by viewModels()
@@ -212,7 +216,6 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
     val player = remember(song) { MidiPlayer(context, song) { playing = false } }
     DisposableEffect(player) { onDispose { player.release() } }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { player.pause(); playing = false }
-    LaunchedEffect(player) { while (true) { withFrameNanos { }; now = player.position(); playing = player.playing } }
     BackHandler { if (tapping) tapping = false else vm.close() }
 
     val shownParts = remember(song, shown) { parts.filter { it.id in shown } }
@@ -220,13 +223,54 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
     val score = remember(shownParts) { if (shownParts.isEmpty()) null else Score.build(song, shownParts) }
     val chords = remember(song) { Chords.recognise(song, parts) }
     val tab = remember(song, tabPartId) { parts.firstOrNull { it.id == tabPartId }?.let { Tab.arrange(it.notes) } ?: emptyList() }
-    val seek: (Double) -> Unit = { t -> player.seek(t); now = t }
+    val staves = if (skin.oneHand) when (hand) { 0 -> listOf(0); 1 -> listOf(1); else -> listOf(0, 1) } else listOf(0, 1)
+
+    // Playing along on a MIDI keyboard
+    val kb = vm.keyboard
+    val pp = vm.practice
+    var userMuted by remember(song) { mutableStateOf<Set<String>>(emptySet()) }
+    var showKeys by remember { mutableStateOf(false) }
+    var waiting by remember { mutableStateOf(false) }
+    var flash by remember { mutableStateOf(false) }
+    val practice = remember(score, staves) { score?.let { sc -> Practice(shownNotes.filter { n -> (if (n.pitch >= 60) 0 else 1) in staves }, sc.unitKey) } }
+    val active = kb.connectedName != null && pp.enabled && practice != null
+    val practiceState = rememberUpdatedState(practice)
+    val activeState = rememberUpdatedState(active)
+    LaunchedEffect(player) {
+        while (true) {
+            withFrameNanos { }
+            val pr = practiceState.value; val on = activeState.value
+            if (!kb.exclusive) while (true) {
+                val e = kb.events.poll() ?: break
+                if (pr == null || !on) continue
+                if (!e.down) { pr.keyUp(e.note); continue }
+                if (pp.waitMode) { if (pr.keyDownWaiting(e.note, e.nanos) && waiting) { waiting = false; player.play() } }
+                else pr.keyDownAlong(e.note, e.nanos, player.positionAt(e.nanos) - pp.latency * player.speed, pp.strictness.window * player.speed)
+            }
+            val pos = player.position()
+            if (pr != null && on) {
+                if (pp.waitMode) { if (player.playing && !pr.waitAllows(pos)) { player.pause(); waiting = true } }
+                else if (player.playing) pr.sweepMissed(pos - pp.latency * player.speed, pp.strictness.window * player.speed)
+            }
+            now = player.position(); playing = player.playing
+        }
+    }
+    LaunchedEffect(practice?.lastWrongNanos) { if ((practice?.lastWrongNanos ?: 0L) > 0L) { flash = true; kotlinx.coroutines.delay(250); flash = false } }
+    LaunchedEffect(active, pp.muteMine, shown, userMuted) {
+        val want = userMuted + if (active && pp.muteMine) shown else emptySet()
+        if (want != player.muted) { player.setMuted(want); playing = player.playing }
+    }
+    val expected: Set<Int> = when {
+        practice == null || !active -> emptySet()
+        pp.waitMode -> practice.current?.targets?.filter { !it.done }?.map { it.pitch }?.toSet() ?: emptySet()
+        else -> practice.steps.filter { it.time >= now - 0.05 && it.time <= now + 0.3 }.flatMap { it.targets }.filter { !it.done }.map { it.pitch }.toSet()
+    }
+    val seek: (Double) -> Unit = { t -> player.seek(t); now = t; practice?.restartAt(t); waiting = false }
     val togglePlay = { if (player.playing) player.pause() else player.play(); playing = player.playing }
     val zoomIn = { if (mode == Mode.Guitar) tabZoom = (tabZoom * 1.25f).coerceAtMost(400f) else space = (space * 1.15f).coerceAtMost(13f) }
     val zoomOut = { if (mode == Mode.Guitar) tabZoom = (tabZoom / 1.25f).coerceAtLeast(40f) else space = (space / 1.15f).coerceAtLeast(4.5f) }
     val nextSpeed = { val sp = when (speed) { 1.0 -> 0.5; 0.5 -> 0.75; else -> 1.0 }; player.setSpeed(sp); speed = sp; playing = player.playing }
     val speedLabel = "${(speed * 100).toInt()}%"
-    val staves = if (skin.oneHand) when (hand) { 0 -> listOf(0); 1 -> listOf(1); else -> listOf(0, 1) } else listOf(0, 1)
 
     @Composable
     fun LessonView(modifier: Modifier) {
@@ -243,13 +287,24 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                                     contentAlignment = Alignment.Center) { Text(label, color = if (sel) Palette.OnAccent else skin.ink, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
                             }
                         }
-                        SheetView(score, lyrics, now, skin, space, staves, seek, Modifier.fillMaxWidth().weight(1f))
+                        SheetView(score, lyrics, now, skin, space, staves, seek, Modifier.fillMaxWidth().weight(1f),
+                            marks = if (active) practice!!.marks else emptyMap(), flash = flash)
                     }
                 Mode.Falling -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
                     FallingView(song, shownNotes, now, seek, Modifier.fillMaxSize())
                 Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, tabZoom, seek) { tabPartId = it }
             }
+            if (active && practice != null) PracticeHud(practice, pp.waitMode, waiting, expected, song.keySharps, Modifier.align(Alignment.TopEnd))
         }
+    }
+
+    @Composable
+    fun Strip() {
+        if (!active || practice == null) return
+        val ps = practice.steps.flatMap { s -> s.targets.map { it.pitch } }
+        val lo = ((ps.minOrNull() ?: 48) - 2).let { it - (it % 12) }.coerceAtLeast(21)
+        val hi = ((ps.maxOrNull() ?: 72) + 2).let { it + 11 - (it % 12) }.coerceAtMost(108)
+        KeyStrip(lo, hi, practice.held, expected, Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 12.dp))
     }
 
     @Composable
@@ -257,6 +312,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Parts (show / hear)") }, onClick = { menu = false; showParts = true })
             DropdownMenuItem(text = { Text("Lyrics") }, onClick = { menu = false; showLyricsMenu = true })
+            DropdownMenuItem(text = { Text(if (kb.connectedName != null) "Keyboard: ${kb.connectedName}" else "Connect a keyboard") }, onClick = { menu = false; showKeys = true })
             DropdownMenuItem(text = { Text("Settings and skins") }, onClick = { menu = false; vm.openSettings(true) })
             DropdownMenuItem(text = { Text("Bigger notes") }, onClick = { zoomIn() })
             DropdownMenuItem(text = { Text("Smaller notes") }, onClick = { zoomOut() })
@@ -288,6 +344,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().padding(top = 6.dp, end = 8.dp, bottom = 2.dp)) {
                     LessonView(Modifier.weight(1f).fillMaxWidth())
+                    Strip()
                     LyricsExtras()
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
@@ -305,7 +362,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                         Text(songInfo(song), color = Palette.Muted, fontSize = 12.sp, maxLines = 1)
                     }
                     TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
-                    TextButton(onClick = { showLyricsMenu = true }) { Text("Lyrics", color = Palette.Accent) }
+                    TextButton(onClick = { showKeys = true }) { Text(if (kb.connectedName != null) "● Keys" else "Keys", color = if (kb.connectedName != null) Color(0xFF49D6A0) else Palette.Accent) }
                     Box { IconBtn("More", { menu = true }) { Text("⋮", color = Palette.Text1, fontSize = 22.sp) }; MoreMenu() }
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).background(Palette.Card, RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).padding(4.dp),
@@ -317,6 +374,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                     }
                 }
                 LessonView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
+                Strip()
                 LyricsExtras()
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
@@ -334,7 +392,8 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
         }
     }
 
-    if (showParts) PartsDialog(parts, shown, player.muted, { shown = it }, { player.setMuted(it) }) { showParts = false }
+    if (showParts) PartsDialog(parts, shown, userMuted, { shown = it }, { userMuted = it }) { showParts = false }
+    if (showKeys) KeyboardDialog(kb, pp, onResetScore = { practice?.marks?.clear(); practice?.resetScore(); practice?.restartAt(now) }) { showKeys = false }
     if (showLyricsMenu) LyricsMenu(lyrics, vm, onTap = { tapping = true }) { showLyricsMenu = false }
 }
 
@@ -527,5 +586,23 @@ private fun SkinSwatch(k: Skin) {
             drawOval(c, androidx.compose.ui.geometry.Offset(size.width * x - r * 1.2f, gap * ys[i] - r), androidx.compose.ui.geometry.Size(r * 2.4f, r * 2f))
         }
         if (k.scroll) drawLine(k.now, androidx.compose.ui.geometry.Offset(size.width * 0.4f, gap * 0.8f), androidx.compose.ui.geometry.Offset(size.width * 0.4f, gap * 7.2f), 2f)
+    }
+}
+
+/** Score while playing on a keyboard, and what to play next in wait mode. */
+@Composable
+private fun PracticeHud(p: Practice, wait: Boolean, waiting: Boolean, expected: Set<Int>, key: Int, modifier: Modifier) {
+    Column(modifier.padding(8.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.background(Color(0xE616161E), RoundedCornerShape(99.dp)).padding(horizontal = 10.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("✓ ${p.perfect + p.good + p.ok}", color = Color(0xFF49D6A0), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("✗ ${p.missed + p.wrong}", color = Color(0xFFFF7A7A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("${p.accuracy}%", color = Palette.Text1, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        if (!wait) p.lastGrade?.let { g ->
+            Text(g.name.uppercase(), color = when (g) { com.sirveillanceai.mixokeys.practice.Grade.Perfect -> Color(0xFF49D6A0); com.sirveillanceai.mixokeys.practice.Grade.Missed -> Color(0xFFFF7A7A); else -> Color(0xFFFFC93C) },
+                fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.background(Color(0xE616161E), RoundedCornerShape(99.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+        }
+        if (waiting && expected.isNotEmpty()) Text("Play " + expected.sorted().joinToString(" ") { Spelling.noteName(it, key) },
+            color = Palette.OnAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color(0xFFFFB23F), RoundedCornerShape(99.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
     }
 }
