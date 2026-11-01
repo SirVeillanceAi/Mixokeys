@@ -163,9 +163,9 @@ class PracticePrefs(app: Application) {
     var latency by mutableStateOf(p.getFloat("latency", 0.08f).toDouble()); private set
     var calibrated by mutableStateOf(p.contains("latency")); private set
 
-    fun setEnabled(v: Boolean) { enabled = v; p.edit().putBoolean("enabled", v).apply() }
-    fun setWait(v: Boolean) { waitMode = v; p.edit().putBoolean("wait", v).apply() }
-    fun setStrict(v: Strictness) { strictness = v; p.edit().putString("strict", v.name).apply() }
-    fun setMuteMine(v: Boolean) { muteMine = v; p.edit().putBoolean("muteMine", v).apply() }
-    fun setLatency(v: Double) { latency = v; calibrated = true; p.edit().putFloat("latency", v.toFloat()).apply() }
+    fun changeEnabled(v: Boolean) { enabled = v; p.edit().putBoolean("enabled", v).apply() }
+    fun changeWait(v: Boolean) { waitMode = v; p.edit().putBoolean("wait", v).apply() }
+    fun changeStrict(v: Strictness) { strictness = v; p.edit().putString("strict", v.name).apply() }
+    fun changeMuteMine(v: Boolean) { muteMine = v; p.edit().putBoolean("muteMine", v).apply() }
+    fun changeLatency(v: Double) { latency = v; calibrated = true; p.edit().putFloat("latency", v.toFloat()).apply() }
 }

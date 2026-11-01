@@ -77,25 +77,25 @@ fun KeyboardDialog(kb: MidiKeyboard, prefs: PracticePrefs, onResetScore: () -> U
                         Text("Check my playing", fontWeight = FontWeight.Bold)
                         Text("Notes turn green when right, red when missed.", fontSize = 12.sp, color = Palette.Muted)
                     }
-                    Switch(checked = prefs.enabled, onCheckedChange = prefs::setEnabled)
+                    Switch(checked = prefs.enabled, onCheckedChange = prefs::changeEnabled)
                 }
                 Text("How it plays", fontSize = 13.sp, color = Palette.Muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = prefs.waitMode, onClick = { prefs.setWait(true) }, label = { Text("Wait for me") })
-                    FilterChip(selected = !prefs.waitMode, onClick = { prefs.setWait(false) }, label = { Text("Play along") })
+                    FilterChip(selected = prefs.waitMode, onClick = { prefs.changeWait(true) }, label = { Text("Wait for me") })
+                    FilterChip(selected = !prefs.waitMode, onClick = { prefs.changeWait(false) }, label = { Text("Play along") })
                 }
                 Text(if (prefs.waitMode) "The music stops at each note until you play it." else "The music keeps going; each note is graded Perfect, Good or OK by timing.",
                     fontSize = 12.sp, color = Palette.Muted)
                 if (!prefs.waitMode) {
                     Text("Timing", fontSize = 13.sp, color = Palette.Muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Strictness.entries.forEach { s -> FilterChip(selected = prefs.strictness == s, onClick = { prefs.setStrict(s) }, label = { Text(s.label.substringBefore(' ')) }) }
+                        Strictness.entries.forEach { s -> FilterChip(selected = prefs.strictness == s, onClick = { prefs.changeStrict(s) }, label = { Text(s.label.substringBefore(' ')) }) }
                     }
                     Text("${prefs.strictness.label}: how early or late a note may be and still count. Perfect is within the inner 40%.", fontSize = 12.sp, color = Palette.Muted)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Mute my part while I play", modifier = Modifier.weight(1f))
-                    Switch(checked = prefs.muteMine, onCheckedChange = prefs::setMuteMine)
+                    Switch(checked = prefs.muteMine, onCheckedChange = prefs::changeMuteMine)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -182,7 +182,7 @@ fun CalibrationDialog(kb: MidiKeyboard, prefs: PracticePrefs, onDone: () -> Unit
         onDismissRequest = onDone,
         confirmButton = {
             val r = result
-            if (r != null) TextButton(onClick = { prefs.setLatency(r.first.coerceIn(-0.05, 0.4)); onDone() }) { Text("Use ${(r.first * 1000).roundToInt()} ms") }
+            if (r != null) TextButton(onClick = { prefs.changeLatency(r.first.coerceIn(-0.05, 0.4)); onDone() }) { Text("Use ${(r.first * 1000).roundToInt()} ms") }
             else TextButton(onClick = { running = true }, enabled = !running) { Text(if (running) "Listening…" else "Start") }
         },
         dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } },
