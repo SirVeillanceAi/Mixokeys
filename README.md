@@ -34,3 +34,8 @@ If a build fails, GitHub opens an issue titled "Build failed: …" with the erro
 ## Credits
 
 - Music symbols: Noto Music, SIL Open Font License 1.1.
+- Sound: [FluidSynth](https://github.com/FluidSynth/fluidsynth) (LGPL-2.1, used as unmodified shared libraries) with the [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS) soundfont by S. Christian Collins (free licence, see `assets/GeneralUser-GS-LICENSE.txt` in the app).
+
+## Building
+
+The sound engine's libraries and soundfont are downloaded, not stored in the repo. Run `tools/fetch-native.sh` once (needs the GitHub CLI) before building locally; the GitHub build does this by itself.

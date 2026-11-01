@@ -28,10 +28,13 @@ jobs:
 
       - name: Build the app
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          chmod +x gradlew
+          chmod +x gradlew tools/fetch-native.sh
           set -o pipefail
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+          tools/fetch-native.sh 2>&1 | tee build.log
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee -a build.log
 
       - name: Keep the APK with this run
         uses: actions/upload-artifact@v4

@@ -12,13 +12,36 @@ import kotlin.math.abs
  * by writing a changed copy of the file, so the sound never stretches or warbles.
  * Positions are in song seconds (the song's own timeline), whatever the speed.
  */
-class MidiPlayer(private val context: Context, private val song: Song, private val onEnd: () -> Unit) {
-    var speed = 1.0
+/** Plays a song; positions are in song seconds whatever the speed. */
+interface SongPlayer {
+    val speed: Double
+    val muted: Set<String>
+    val playing: Boolean
+    /** Which synthesizer is making the sound, for Settings. */
+    val engine: String
+    fun position(): Double
+    fun positionAt(nanos: Long): Double
+    fun play()
+    fun pause()
+    fun seek(t: Double)
+    fun setSpeed(s: Double)
+    fun setMuted(m: Set<String>)
+    fun release()
+}
+
+/** FluidSynth when it's available (better sound, live speed), otherwise Android's built-in synthesizer. */
+fun MidiPlayer(context: Context, song: Song, onEnd: () -> Unit): SongPlayer =
+    if (com.sirveillanceai.mixokeys.audio.Synth.ready) com.sirveillanceai.mixokeys.audio.FluidSongPlayer(context, song, onEnd)
+    else SonivoxPlayer(context, song, onEnd)
+
+class SonivoxPlayer(private val context: Context, private val song: Song, private val onEnd: () -> Unit) : SongPlayer {
+    override var speed = 1.0
         private set
-    var muted: Set<String> = emptySet()
+    override var muted: Set<String> = emptySet()
         private set
-    var playing = false
+    override var playing = false
         private set
+    override val engine = "Android built-in"
 
     private var mp: MediaPlayer? = null
     private var version = 0
@@ -35,7 +58,7 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
         mp = MediaPlayer().apply {
             setDataSource(f.absolutePath)
             prepare()
-            setOnCompletionListener { this@MidiPlayer.playing = false; anchorSong = song.duration; this@MidiPlayer.onEnd() }
+            setOnCompletionListener { this@SonivoxPlayer.playing = false; anchorSong = song.duration; this@SonivoxPlayer.onEnd() }
             seekTo((at / speed * 1000).toInt())
         }
         anchorSong = at
@@ -43,7 +66,7 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
     }
 
     /** Smooth playback position: a steady clock, corrected now and then against the synthesizer. */
-    fun position(): Double {
+    override fun position(): Double {
         val p = mp ?: return anchorSong
         if (!playing) return anchorSong
         val now = System.nanoTime()
@@ -59,12 +82,12 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
     }
 
     /** Song time at [nanos] (System.nanoTime base), e.g. when a key was pressed. */
-    fun positionAt(nanos: Long): Double {
+    override fun positionAt(nanos: Long): Double {
         if (!playing) return anchorSong
         return (anchorSong + (nanos - anchorNanos) / 1e9 * speed).coerceIn(0.0, song.duration)
     }
 
-    fun play() {
+    override fun play() {
         if (playing) return
         if (anchorSong >= song.duration - 0.05) seek(0.0)
         mp?.start()
@@ -72,22 +95,22 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
         anchorNanos = System.nanoTime()
     }
 
-    fun pause() {
+    override fun pause() {
         if (!playing) return
         anchorSong = position()
         mp?.pause()
         playing = false
     }
 
-    fun seek(t: Double) {
+    override fun seek(t: Double) {
         val at = t.coerceIn(0.0, song.duration)
         mp?.seekTo((at / speed * 1000).toInt())
         anchorSong = at
         anchorNanos = System.nanoTime()
     }
 
-    fun setSpeed(s: Double) = change { speed = s }
-    fun setMuted(m: Set<String>) = change { muted = m }
+    override fun setSpeed(s: Double) = change { speed = s }
+    override fun setMuted(m: Set<String>) = change { muted = m }
 
     private inline fun change(block: () -> Unit) {
         val wasPlaying = playing
@@ -98,5 +121,5 @@ class MidiPlayer(private val context: Context, private val song: Song, private v
         if (wasPlaying) play()
     }
 
-    fun release() { mp?.release(); mp = null; playing = false }
+    override fun release() { mp?.release(); mp = null; playing = false }
 }

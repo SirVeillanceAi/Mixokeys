@@ -21,6 +21,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -28,6 +31,8 @@ import androidx.compose.ui.unit.sp
 import com.sirveillanceai.mixokeys.PracticePrefs
 import com.sirveillanceai.mixokeys.input.MidiKeyboard
 import com.sirveillanceai.mixokeys.midi.Midi
+import com.sirveillanceai.mixokeys.MidiPlayer
+import com.sirveillanceai.mixokeys.audio.Synth
 import com.sirveillanceai.mixokeys.practice.Strictness
 import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
@@ -52,6 +57,7 @@ fun KeyboardDialog(kb: MidiKeyboard, prefs: PracticePrefs, onResetScore: () -> U
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val name = kb.connectedName
+                Text("Sound: " + if (Synth.ready) "FluidSynth piano (GeneralUser GS)" else (Synth.error ?: "Android built-in"), fontSize = 12.sp, color = Palette.Muted)
                 Text(if (name != null) "Connected: $name" else "No keyboard connected", fontWeight = FontWeight.Bold,
                     color = if (name != null) Color(0xFF49D6A0) else Palette.Muted)
                 if (!kb.supported) Text("This phone doesn't support MIDI.", color = Palette.Bad)
@@ -79,6 +85,20 @@ fun KeyboardDialog(kb: MidiKeyboard, prefs: PracticePrefs, onResetScore: () -> U
                     }
                     Switch(checked = prefs.enabled, onCheckedChange = prefs::changeEnabled)
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("On-screen piano", fontWeight = FontWeight.Bold)
+                        Text("Play on the phone screen; no keyboard needed.", fontSize = 12.sp, color = Palette.Muted)
+                    }
+                    Switch(checked = prefs.onScreen, onCheckedChange = prefs::changeOnScreen)
+                }
+                if (name != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Hear my keyboard through the phone")
+                        Text("For keyboards without speakers.", fontSize = 12.sp, color = Palette.Muted)
+                    }
+                    Switch(checked = prefs.echo, onCheckedChange = prefs::changeEcho)
+                }
                 Text("How it plays", fontSize = 13.sp, color = Palette.Muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = prefs.waitMode, onClick = { prefs.changeWait(true) }, label = { Text("Wait for me") })
@@ -102,7 +122,7 @@ fun KeyboardDialog(kb: MidiKeyboard, prefs: PracticePrefs, onResetScore: () -> U
                         Text("Delay correction: ${(prefs.latency * 1000).roundToInt()} ms")
                         Text(if (prefs.calibrated) "Measured on this phone" else "A guess. Measure it for fair timing.", fontSize = 12.sp, color = Palette.Muted)
                     }
-                    OutlinedButton(onClick = { calibrating = true }, enabled = name != null) { Text("Measure") }
+                    OutlinedButton(onClick = { calibrating = true }, enabled = name != null || prefs.onScreen) { Text("Measure") }
                 }
                 TextButton(onClick = onResetScore) { Text("Reset my score for this song") }
             }
@@ -146,29 +166,30 @@ fun CalibrationDialog(kb: MidiKeyboard, prefs: PracticePrefs, onDone: () -> Unit
     val offsets = remember { mutableStateListOf<Double>() }
     var result by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var beatNow by remember { mutableIntStateOf(0) }
-    val mp = remember { MediaPlayer() }
-    DisposableEffect(Unit) { kb.exclusive = true; onDispose { mp.release(); kb.exclusive = false } }
+    val clicks = remember { MidiPlayer(ctx, Midi.parse(clickFile(ctx).readBytes(), "clicks")) {} }
+    DisposableEffect(Unit) { kb.exclusive = true; onDispose { clicks.release(); kb.exclusive = false } }
 
     LaunchedEffect(running) {
         if (!running) return@LaunchedEffect
         kb.events.clear(); offsets.clear(); result = null
-        mp.reset(); mp.setDataSource(clickFile(ctx).absolutePath); mp.prepare()
-        mp.start(); startNanos = System.nanoTime()
+        clicks.seek(0.0); clicks.play(); startNanos = System.nanoTime()
         val end = startNanos + ((CLICKS + 1) * BEAT * 1e9).toLong()
         while (System.nanoTime() < end) {
             while (true) {
                 val e = kb.events.poll() ?: break
                 if (!e.down) continue
-                val t = (e.nanos - startNanos) / 1e9
+                if (e.fromScreen) Synth.noteOn(e.note, e.velocity)
+                val t = clicks.positionAt(e.nanos)
                 val beat = (t / BEAT).roundToInt()
                 if (beat >= COUNT_IN && beat < CLICKS) {
                     val off = t - beat * BEAT
                     if (abs(off) < BEAT * 0.45) offsets += off
                 }
             }
-            beatNow = ((System.nanoTime() - startNanos) / 1e9 / BEAT).toInt()
+            beatNow = (clicks.position() / BEAT).toInt()
             delay(10)
         }
+        clicks.pause()
         running = false
         if (offsets.size >= 5) {
             val s = offsets.sorted()
@@ -225,6 +246,64 @@ fun KeyStrip(lo: Int, hi: Int, held: Set<Int>, expected: Set<Int>, modifier: Mod
         for (p in lo..hi) if (isBlackKey(p)) {
             val c = when { p in held && p in expected -> Color(0xFF2FB07F); p in held -> heldC; p in expected -> wantC; else -> Color(0xFF1C1B24) }
             drawRoundRect(c, Offset(x(p), 0f), Size(bw, size.height * 0.6f), CornerRadius(3f))
+        }
+    }
+}
+
+/* ───────────────────────── On-screen piano ───────────────────────── */
+
+/**
+ * A playable keyboard: several fingers at once, slide between keys, louder lower down on a key.
+ * Keys to play now are outlined in orange; keys you hold are blue (green when right).
+ */
+@Composable
+fun OnScreenKeys(lo: Int, hi: Int, held: Set<Int>, expected: Set<Int>, onDown: (Int, Int) -> Unit, onUp: (Int) -> Unit, modifier: Modifier) {
+    val loS = rememberUpdatedState(lo); val hiS = rememberUpdatedState(hi)
+    val pressed = remember { mutableStateMapOf<Int, Boolean>() }
+    Canvas(modifier.background(Color(0xFF16161E)).pointerInput(Unit) {
+        val active = HashMap<PointerId, Int>()
+        fun keyAt(pos: Offset): Pair<Int, Int>? {
+            val l = loS.value; val h = hiS.value
+            val whites = (l..h).filter { !isBlackKey(it) }
+            if (whites.isEmpty() || pos.x < 0 || pos.x > size.width || pos.y < 0 || pos.y > size.height) return null
+            val ww = size.width.toFloat() / whites.size; val bw = ww * 0.6f
+            if (pos.y < size.height * 0.6f) for (p in l..h) if (isBlackKey(p)) {
+                val wIndex = (l until p).count { !isBlackKey(it) }
+                val x0 = wIndex * ww - bw / 2
+                if (pos.x >= x0 && pos.x <= x0 + bw) return p to (50 + 77 * pos.y / (size.height * 0.6f)).toInt().coerceIn(30, 127)
+            }
+            val p = whites[(pos.x / ww).toInt().coerceIn(0, whites.size - 1)]
+            return p to (40 + 87 * pos.y / size.height).toInt().coerceIn(30, 127)
+        }
+        awaitPointerEventScope {
+            while (true) {
+                val ev = awaitPointerEvent()
+                for (c in ev.changes) {
+                    val hit = if (c.pressed) keyAt(c.position) else null
+                    val prev = active[c.id]
+                    if (hit?.first != prev) {
+                        if (prev != null) { onUp(prev); active.remove(c.id); pressed.remove(prev) }
+                        if (hit != null) { onDown(hit.first, hit.second); active[c.id] = hit.first; pressed[hit.first] = true }
+                    }
+                    c.consume()
+                }
+            }
+        }
+    }) {
+        val whites = (lo..hi).count { !isBlackKey(it) }.coerceAtLeast(1)
+        val ww = size.width / whites; val bw = ww * 0.6f
+        fun x(p: Int): Float { val w = (lo until p).count { !isBlackKey(it) }; return if (isBlackKey(p)) w * ww - bw / 2 else w * ww }
+        val down = held + pressed.keys
+        val label = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textAlign = android.graphics.Paint.Align.CENTER; textSize = (ww * 0.32f).coerceAtMost(13.dp.toPx()); color = 0xFF6A6880.toInt() }
+        for (p in lo..hi) if (!isBlackKey(p)) {
+            val c = when { p in down && p in expected -> Color(0xFF49D6A0); p in down -> Color(0xFF4D96FF); p in expected -> Color(0xFFFFE2C7); else -> Color(0xFFF4F2FA) }
+            drawRoundRect(c, Offset(x(p) + 1f, 0f), Size(ww - 2f, size.height - 1f), CornerRadius(6f))
+            if (p in expected) drawRoundRect(Color(0xFFE0701A), Offset(x(p) + 1f, size.height - 8f), Size(ww - 2f, 7f), CornerRadius(3f))
+            if (p % 12 == 0) drawContext.canvas.nativeCanvas.drawText("C${p / 12 - 1}", x(p) + ww / 2, size.height - 14f, label)
+        }
+        for (p in lo..hi) if (isBlackKey(p)) {
+            val c = when { p in down && p in expected -> Color(0xFF2FB07F); p in down -> Color(0xFF4D96FF); p in expected -> Color(0xFFE0701A); else -> Color(0xFF1C1B24) }
+            drawRoundRect(c, Offset(x(p), 0f), Size(bw, size.height * 0.6f), CornerRadius(4f))
         }
     }
 }

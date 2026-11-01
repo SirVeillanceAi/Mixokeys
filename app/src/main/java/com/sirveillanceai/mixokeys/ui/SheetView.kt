@@ -3,8 +3,13 @@ package com.sirveillanceai.mixokeys.ui
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.positionChange
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -54,13 +59,22 @@ private class Painters(music: Typeface) {
     val name = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
 }
 
+/** A practice loop between two song times; [on] = playback repeats it. */
+class LoopRange(val a: Double, val b: Double, val on: Boolean)
+
+private val LoopBlue = Color(0xFF3B82F6)
+
 /**
  * Real sheet music for the shown parts, styled by [skin]: either one long line scrolling past a fixed
- * playhead, or pages that turn by themselves. Tap to jump; drag (scroll) or swipe (pages) to move.
+ * playhead, or pages that turn by themselves.
+ * Gestures: tap to jump; drag (scroll) or swipe (pages) to move; long-press a bar to loop it;
+ * drag the blue A / B loop markers to change the loop (they snap to beats).
  */
 @Composable
 fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: Float, staves: List<Int>, onSeek: (Double) -> Unit, modifier: Modifier,
-              marks: Map<Long, Grade> = emptyMap(), flash: Boolean = false) {
+              marks: Map<Long, Grade> = emptyMap(), flash: Boolean = false,
+              loop: LoopRange? = null, onLoopChange: (Double, Double) -> Unit = { _, _ -> }, onLongPress: (Double) -> Unit = {},
+              snap: (Double) -> Double = { it }) {
     val ctx = LocalContext.current
     val music = remember { ResourcesCompat.getFont(ctx, R.font.noto_music) ?: Typeface.DEFAULT }
     val p = remember { Painters(music) }
@@ -68,6 +82,7 @@ fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: F
     BoxWithConstraints(modifier.clipToBounds()) {
         val g = with(density) { spaceDp.dp.toPx() }
         val margin = with(density) { 12.dp.toPx() }
+        val hitR = with(density) { 26.dp.toPx() }
         val wPx = constraints.maxWidth.toFloat(); val hPx = constraints.maxHeight.toFloat()
         val layout = remember(score, g, wPx, hPx, skin.scroll, staves, skin.names) {
             val width = if (skin.scroll) 1e7f else (wPx - 2 * margin) / g
@@ -81,93 +96,145 @@ fun SheetView(score: Score, lyrics: Lyrics?, now: Double, skin: Skin, spaceDp: F
             }
             Pages(systems, pages)
         }
+        if (layout.systems.isEmpty()) return@BoxWithConstraints
         val nowState = rememberUpdatedState(now)
+        val loopState = rememberUpdatedState(loop)
         val playX = margin + with(density) { 64.dp.toPx() }.coerceAtMost(wPx * 0.3f)
 
-        if (skin.scroll) {
-            val sys = layout.systems.firstOrNull() ?: return@BoxWithConstraints
-            Canvas(
-                Modifier.fillMaxSize()
-                    .pointerInput(layout) {
-                        detectTapGestures { pos ->
-                            val x0 = playX - sys.xAt(nowState.value) * g
-                            onSeek(sys.timeAt((pos.x - x0) / g))
-                        }
-                    }
-                    .pointerInput(layout) {
-                        detectHorizontalDragGestures { ch, dx ->
-                            ch.consume()
-                            val x = sys.xAt(nowState.value) - dx / g
-                            onSeek(sys.timeAt(x))
-                        }
-                    },
-            ) {
-                drawRect(skin.paper)
-                p.glyph.textSize = g / 0.244f
-                val t = nowState.value
-                val top = (size.height - sys.height * g) / 2f - sys.top * g
-                val ox = playX - sys.xAt(t) * g
-                val visL = -ox / g - 4f; val visR = (size.width - ox) / g + 4f
-                drawEls(sys, skin, p, g, ox, top, t, sys.headerEnd until sys.els.size, visL, visR, marks = marks)
-                if (flash) drawRect(Color(0x33FF3B3B), Offset(playX - 1.6f * g, 0f), Size(3.2f * g, size.height))
-                // playhead
-                drawLine(skin.now, Offset(playX, top + (-2f) * g), Offset(playX, top + (sys.staffBottom + 2f) * g), 2.5f)
-                drawLyrics(lyrics, sys, skin, p, g, ox, top, t, density.density)
-                // fixed clef + key column at the left
-                val hw = sys.headerW * g + margin
-                if (!skin.ghostClefs) {
-                    drawRect(skin.paper, Offset.Zero, Size(hw, size.height))
-                    drawRect(Brush.horizontalGradient(listOf(skin.paper, skin.paper.copy(alpha = 0f)), startX = hw, endX = hw + 18f), Offset(hw, 0f), Size(18f, size.height))
-                    for (i in 0 until sys.els.size) { val e = sys.els[i]; if (e is LineEl && e.w <= 0.1f && e.y1 == e.y2) drawLine(skin.lines, Offset(0f, top + e.y1 * g), Offset(hw + 18f, top + e.y1 * g), max(1f, e.w * g)) }
-                }
-                drawEls(sys, skin, p, g, margin, top, t, 0 until sys.headerEnd, -1e9f, 1e9f, alpha = if (skin.ghostClefs) 0.28f else 1f)
-            }
-        } else {
-            fun systemAt(t: Double): Int = layout.systems.indexOfLast { it.start <= t + 1e-6 }.coerceAtLeast(0)
-            val page = layout.pages.indexOfFirst { systemAt(now) in it }.coerceAtLeast(0)
-            val pageState = rememberUpdatedState(page)
-            fun tops(pg: Int): List<Pair<Int, Float>> {
+        fun systemAt(t: Double): Int = layout.systems.indexOfLast { it.start <= t + 1e-6 }.coerceAtLeast(0)
+        val page = if (skin.scroll) 0 else layout.pages.indexOfFirst { systemAt(now) in it }.coerceAtLeast(0)
+        val pageState = rememberUpdatedState(page)
+
+        /** Each visible system with its x offset and top, for the current time. */
+        fun placed(t: Double, pg: Int): List<Triple<SystemLayout, Float, Float>> =
+            if (skin.scroll) {
+                val sys = layout.systems[0]
+                listOf(Triple(sys, playX - sys.xAt(t) * g, (hPx - sys.height * g) / 2f - sys.top * g))
+            } else {
                 var y = margin
-                return layout.pages.getOrNull(pg)?.map { si -> val s = layout.systems[si]; val top = y - s.top * g; y += (s.height + 1.2f) * g; si to top } ?: emptyList()
+                layout.pages.getOrNull(pg)?.map { si -> val s = layout.systems[si]; val top = y - s.top * g; y += (s.height + 1.2f) * g; Triple(s, margin, top) } ?: emptyList()
             }
-            Canvas(
-                Modifier.fillMaxSize()
-                    .pointerInput(layout) {
-                        detectTapGestures { pos ->
-                            for ((si, top) in tops(pageState.value)) {
-                                val s = layout.systems[si]
-                                if (pos.y >= top + s.top * g && pos.y <= top + s.bottom * g) { onSeek(s.timeAt((pos.x - margin) / g)); break }
-                            }
+
+        fun timeAt(pos: Offset): Double? {
+            for ((s, ox, top) in placed(nowState.value, pageState.value)) {
+                if (skin.scroll || (pos.y >= top + s.top * g && pos.y <= top + s.bottom * g)) return s.timeAt((pos.x - ox) / g)
+            }
+            return null
+        }
+
+        /** 1 = A marker, 2 = B marker, 0 = none. */
+        fun hitMarker(pos: Offset): Int {
+            val l = loopState.value ?: return 0
+            for ((s, ox, top) in placed(nowState.value, pageState.value)) {
+                val inY = skin.scroll || (pos.y >= top + (s.top - 1f) * g && pos.y <= top + (s.bottom + 1f) * g)
+                if (!inY) continue
+                if (l.a >= s.start && l.a <= s.end && abs(pos.x - (ox + s.xAt(l.a) * g)) < hitR) return 1
+                if (l.b >= s.start && l.b <= s.end && abs(pos.x - (ox + s.xAt(l.b) * g)) < hitR) return 2
+            }
+            return 0
+        }
+
+        Canvas(
+            Modifier.fillMaxSize().pointerInput(layout) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val marker = hitMarker(down.position)
+                    if (marker != 0) {
+                        down.consume()
+                        drag(down.id) { ch ->
+                            ch.consume()
+                            val l = loopState.value ?: return@drag
+                            val t = timeAt(ch.position)?.let(snap) ?: return@drag
+                            if (marker == 1) onLoopChange(minOf(t, l.b - 0.05), l.b) else onLoopChange(l.a, maxOf(t, l.a + 0.05))
                         }
+                        return@awaitEachGesture
                     }
-                    .pointerInput(layout) {
-                        var total = 0f
-                        detectHorizontalDragGestures(onDragStart = { total = 0f }, onDragEnd = {
-                            if (abs(total) > 80) {
-                                val pg = (pageState.value + if (total < 0) 1 else -1).coerceIn(0, layout.pages.size - 1)
+                    val startTime = timeAt(down.position)
+                    var total = Offset.Zero
+                    var moved = false
+                    val released = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull true
+                            if (!c.pressed) return@withTimeoutOrNull true
+                            total += c.positionChange()
+                            if (total.getDistance() > viewConfiguration.touchSlop) { moved = true; return@withTimeoutOrNull false }
+                        }
+                        @Suppress("UNREACHABLE_CODE") false
+                    }
+                    when {
+                        released == null -> { startTime?.let(onLongPress); waitForUpOrCancellation() }   // long press
+                        released == true && !moved -> startTime?.let(onSeek)                            // tap
+                        skin.scroll -> {                                                                // scrub
+                            val sys = layout.systems[0]
+                            onSeek(sys.timeAt(sys.xAt(nowState.value) - total.x / g))
+                            horizontalDrag(down.id) { ch -> ch.consume(); onSeek(sys.timeAt(sys.xAt(nowState.value) - ch.positionChange().x / g)) }
+                        }
+                        else -> {                                                                       // page swipe
+                            var dx = total.x
+                            horizontalDrag(down.id) { ch -> ch.consume(); dx += ch.positionChange().x }
+                            if (abs(dx) > 80) {
+                                val pg = (pageState.value + if (dx < 0) 1 else -1).coerceIn(0, layout.pages.size - 1)
                                 layout.pages.getOrNull(pg)?.let { onSeek(layout.systems[it.first].start) }
                             }
-                        }) { ch, dx -> ch.consume(); total += dx }
-                    },
-            ) {
-                drawRect(skin.paper)
-                p.glyph.textSize = g / 0.244f
-                val t = nowState.value
-                for ((si, top) in tops(page)) {
-                    val s = layout.systems[si]
-                    val current = t >= s.start && t < s.end
+                        }
+                    }
+                }
+            },
+        ) {
+            drawRect(skin.paper)
+            p.glyph.textSize = g / 0.244f
+            val t = nowState.value
+            val l = loopState.value
+            for ((s, ox, top) in placed(t, page)) {
+                val x = { tt: Double -> ox + s.xAt(tt) * g }
+                // loop shading behind the music
+                if (l != null && l.b > s.start && l.a < s.end) {
+                    val x1 = if (l.a >= s.start) x(l.a) else ox
+                    val x2 = if (l.b <= s.end) x(l.b) else ox + s.width * g
+                    drawRect(LoopBlue.copy(alpha = if (l.on) 0.10f else 0.05f), Offset(x1, top - 2.5f * g), Size(x2 - x1, (s.staffBottom + 5f) * g))
+                }
+                val current = t >= s.start && t < s.end
+                if (skin.scroll) {
+                    val visL = -ox / g - 4f; val visR = (size.width - ox) / g + 4f
+                    drawEls(s, skin, p, g, ox, top, t, s.headerEnd until s.els.size, visL, visR, marks = marks)
+                } else {
                     if (current) {
-                        val cx = margin + s.xAt(t) * g
+                        val cx = x(t)
                         if (flash) drawRect(Color(0x33FF3B3B), Offset(cx - 1.6f * g, top - 2f * g), Size(3.2f * g, (s.staffBottom + 4f) * g))
                         drawRect(skin.now.copy(alpha = 0.10f), Offset(cx - 1.2f * g, top - 1.5f * g), Size(2.4f * g, (s.staffBottom + 3f) * g))
                     }
-                    drawEls(s, skin, p, g, margin, top, t, s.els.indices, -1e9f, 1e9f, marks = marks)
-                    if (current) {
-                        val cx = margin + s.xAt(t) * g
-                        drawLine(skin.now, Offset(cx, top - 1.5f * g), Offset(cx, top + (s.staffBottom + 1.5f) * g), 2.5f)
-                    }
-                    drawLyrics(lyrics, s, skin, p, g, margin, top, t, density.density)
+                    drawEls(s, skin, p, g, ox, top, t, s.els.indices, -1e9f, 1e9f, marks = marks)
                 }
+                // loop markers: A flag points right, B flag points left
+                if (l != null) for ((tt, isA) in listOf(l.a to true, l.b to false)) {
+                    if (tt < s.start || tt > s.end) continue
+                    val mx = x(tt)
+                    val c = if (l.on) LoopBlue else LoopBlue.copy(alpha = 0.45f)
+                    drawLine(c, Offset(mx, top - 2.6f * g), Offset(mx, top + (s.staffBottom + 2f) * g), 3f)
+                    val fw = 2.4f * g; val fh = 1.9f * g; val fy = top - 2.6f * g - fh
+                    drawRoundRect(c, Offset(if (isA) mx else mx - fw, fy), Size(fw, fh), androidx.compose.ui.geometry.CornerRadius(0.4f * g))
+                    p.text.typeface = Typeface.DEFAULT_BOLD; p.text.textSize = 1.35f * g; p.text.color = android.graphics.Color.WHITE; p.text.textAlign = Paint.Align.CENTER
+                    drawContext.canvas.nativeCanvas.drawText(if (isA) "A" else "B", if (isA) mx + fw / 2 else mx - fw / 2, fy + fh * 0.75f, p.text)
+                }
+                if (skin.scroll) {
+                    if (flash) drawRect(Color(0x33FF3B3B), Offset(playX - 1.6f * g, 0f), Size(3.2f * g, size.height))
+                    drawLine(skin.now, Offset(playX, top + (-2f) * g), Offset(playX, top + (s.staffBottom + 2f) * g), 2.5f)
+                    drawLyrics(lyrics, s, skin, p, g, ox, top, t, density.density)
+                    // fixed clef + key column at the left
+                    val hw = s.headerW * g + margin
+                    if (!skin.ghostClefs) {
+                        drawRect(skin.paper, Offset.Zero, Size(hw, size.height))
+                        drawRect(Brush.horizontalGradient(listOf(skin.paper, skin.paper.copy(alpha = 0f)), startX = hw, endX = hw + 18f), Offset(hw, 0f), Size(18f, size.height))
+                        for (i in 0 until s.els.size) { val e = s.els[i]; if (e is LineEl && e.w <= 0.1f && e.y1 == e.y2) drawLine(skin.lines, Offset(0f, top + e.y1 * g), Offset(hw + 18f, top + e.y1 * g), max(1f, e.w * g)) }
+                    }
+                    drawEls(s, skin, p, g, margin, top, t, 0 until s.headerEnd, -1e9f, 1e9f, alpha = if (skin.ghostClefs) 0.28f else 1f)
+                } else {
+                    if (current) { val cx = x(t); drawLine(skin.now, Offset(cx, top - 1.5f * g), Offset(cx, top + (s.staffBottom + 1.5f) * g), 2.5f) }
+                    drawLyrics(lyrics, s, skin, p, g, ox, top, t, density.density)
+                }
+            }
+            if (!skin.scroll) {
                 p.text.typeface = Typeface.DEFAULT; p.text.textSize = 11f * density.density; p.text.color = skin.soft.toArgb(); p.text.textAlign = Paint.Align.RIGHT
                 drawContext.canvas.nativeCanvas.drawText("Page ${page + 1} of ${layout.pages.size}", size.width - margin, size.height - 8f * density.density, p.text)
             }

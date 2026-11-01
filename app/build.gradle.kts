@@ -12,9 +12,21 @@ android {
         applicationId = "com.sirveillanceai.mixokeys"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.6.0"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+        externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_shared") } }
     }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // The soundfont is opened directly from the APK, so keep it uncompressed.
+    androidResources { noCompress += "sf2" }
 
     signingConfigs {
         // A fixed key kept in the repo, so each new build installs over the last one.
@@ -48,6 +60,7 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        jniLibs.pickFirsts += "**/libc++_shared.so"
     }
 }
 

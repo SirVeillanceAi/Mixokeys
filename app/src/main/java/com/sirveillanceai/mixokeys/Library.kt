@@ -54,6 +54,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The connected MIDI keyboard (USB or Bluetooth); stays connected across songs. */
     val keyboard = MidiKeyboard(app).also { it.start() }
+    init { viewModelScope.launch(Dispatchers.IO) { com.sirveillanceai.mixokeys.audio.Synth.init(app) } }
     val practice = PracticePrefs(app)
 
     override fun onCleared() { keyboard.stop() }
@@ -76,6 +77,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 if (persist) runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                withContext(Dispatchers.IO) { com.sirveillanceai.mixokeys.audio.Synth.init(app) }
                 val name = displayName(uri)
                 val (song, key) = withContext(Dispatchers.IO) {
                     val bytes = app.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Couldn't open the file.")
@@ -162,7 +164,11 @@ class PracticePrefs(app: Application) {
     /** Measured delay between the phone's sound and your key presses, in seconds. */
     var latency by mutableStateOf(p.getFloat("latency", 0.08f).toDouble()); private set
     var calibrated by mutableStateOf(p.contains("latency")); private set
+    var onScreen by mutableStateOf(p.getBoolean("onScreen", false)); private set
+    var echo by mutableStateOf(p.getBoolean("echo", false)); private set
 
+    fun changeOnScreen(v: Boolean) { onScreen = v; p.edit().putBoolean("onScreen", v).apply() }
+    fun changeEcho(v: Boolean) { echo = v; p.edit().putBoolean("echo", v).apply() }
     fun changeEnabled(v: Boolean) { enabled = v; p.edit().putBoolean("enabled", v).apply() }
     fun changeWait(v: Boolean) { waitMode = v; p.edit().putBoolean("wait", v).apply() }
     fun changeStrict(v: Strictness) { strictness = v; p.edit().putString("strict", v.name).apply() }

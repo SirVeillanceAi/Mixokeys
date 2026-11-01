@@ -23,7 +23,7 @@ import androidx.compose.runtime.setValue
 import java.util.concurrent.ConcurrentLinkedQueue
 
 /** A key going down or up on a connected keyboard. [nanos] is when the keyboard sent it (System.nanoTime base). */
-data class KeyEvent(val note: Int, val velocity: Int, val down: Boolean, val nanos: Long)
+data class KeyEvent(val note: Int, val velocity: Int, val down: Boolean, val nanos: Long, val fromScreen: Boolean = false)
 
 /**
  * Connects to a MIDI keyboard over USB (with an OTG adapter) or Bluetooth, and queues its key presses.

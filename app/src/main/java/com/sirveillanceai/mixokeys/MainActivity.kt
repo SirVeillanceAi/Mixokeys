@@ -55,6 +55,10 @@ import androidx.compose.ui.graphics.Color
 import com.sirveillanceai.mixokeys.ui.TabView
 import com.sirveillanceai.mixokeys.ui.KeyboardDialog
 import com.sirveillanceai.mixokeys.ui.KeyStrip
+import com.sirveillanceai.mixokeys.ui.OnScreenKeys
+import com.sirveillanceai.mixokeys.ui.LoopRange
+import com.sirveillanceai.mixokeys.audio.Synth
+import com.sirveillanceai.mixokeys.input.KeyEvent
 import com.sirveillanceai.mixokeys.practice.Practice
 import com.sirveillanceai.mixokeys.music.Spelling
 
@@ -233,19 +237,46 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
     var waiting by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf(false) }
     val practice = remember(score, staves) { score?.let { sc -> Practice(shownNotes.filter { n -> (if (n.pitch >= 60) 0 else 1) in staves }, sc.unitKey) } }
-    val active = kb.connectedName != null && pp.enabled && practice != null
+    val active = (kb.connectedName != null || pp.onScreen) && pp.enabled && practice != null
     val practiceState = rememberUpdatedState(practice)
     val activeState = rememberUpdatedState(active)
+
+    // A–B loop (MuseScore style): markers on the sheet, playback jumps from B back to A
+    var loopA by remember(song) { mutableStateOf<Double?>(null) }
+    var loopB by remember(song) { mutableStateOf<Double?>(null) }
+    var loopOn by remember(song) { mutableStateOf(false) }
+    var loopPasses by remember(song) { mutableIntStateOf(0) }
+    val loopS = rememberUpdatedState(Triple(loopA, loopB, loopOn))
+    fun barIndexAt(t: Double) = song.bars.indexOfLast { it <= t + 1e-6 }.coerceAtLeast(0)
+    fun barTime(i: Int) = song.bars.getOrNull(i) ?: song.duration
+    val snapToBeat: (Double) -> Double = { t ->
+        val bs = song.beats
+        if (bs.isEmpty()) t else {
+            var lo = 0; var hi = bs.size - 1
+            while (lo < hi) { val m = (lo + hi) / 2; if (bs[m] < t) lo = m + 1 else hi = m }
+            listOfNotNull(bs.getOrNull(lo - 1), bs.getOrNull(lo)).minBy { kotlin.math.abs(it - t) }
+        }
+    }
+    fun loopBar(t: Double) { val i = barIndexAt(t); loopA = barTime(i); loopB = barTime(i + 1); loopOn = true; loopPasses = 0 }
+    val toggleLoop = {
+        if (loopA == null) { val i = barIndexAt(now); loopA = barTime(i); loopB = barTime(i + 2); loopOn = true; loopPasses = 0 }
+        else loopOn = !loopOn
+    }
     LaunchedEffect(player) {
         while (true) {
             withFrameNanos { }
             val pr = practiceState.value; val on = activeState.value
             if (!kb.exclusive) while (true) {
                 val e = kb.events.poll() ?: break
+                if (!e.fromScreen && pp.echo) { if (e.down) Synth.noteOn(e.note, e.velocity) else Synth.noteOff(e.note) }
                 if (pr == null || !on) continue
                 if (!e.down) { pr.keyUp(e.note); continue }
                 if (pp.waitMode) { if (pr.keyDownWaiting(e.note, e.nanos) && waiting) { waiting = false; player.play() } }
                 else pr.keyDownAlong(e.note, e.nanos, player.positionAt(e.nanos) - pp.latency * player.speed, pp.strictness.window * player.speed)
+            }
+            val (la, lb, lon) = loopS.value
+            if (lon && la != null && lb != null && player.playing && player.position() >= lb - 0.01) {
+                player.seek(la); pr?.restartAt(la); loopPasses++
             }
             val pos = player.position()
             if (pr != null && on) {
@@ -287,14 +318,30 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                                     contentAlignment = Alignment.Center) { Text(label, color = if (sel) Palette.OnAccent else skin.ink, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
                             }
                         }
+                        val la = loopA; val lb = loopB
                         SheetView(score, lyrics, now, skin, space, staves, seek, Modifier.fillMaxWidth().weight(1f),
-                            marks = if (active) practice!!.marks else emptyMap(), flash = flash)
+                            marks = if (active) practice!!.marks else emptyMap(), flash = flash,
+                            loop = if (la != null && lb != null) LoopRange(la, lb, loopOn) else null,
+                            onLoopChange = { a, b -> loopA = a; loopB = b; loopOn = true },
+                            onLongPress = { t -> loopBar(t) }, snap = snapToBeat)
                     }
                 Mode.Falling -> if (shownNotes.isEmpty()) Hint("Pick a part to show under Parts.") else
                     FallingView(song, shownNotes, now, seek, Modifier.fillMaxSize())
                 Mode.Guitar -> GuitarPane(song, parts, chords, tab, tabPartId, now, tabZoom, seek) { tabPartId = it }
             }
             if (active && practice != null) PracticeHud(practice, pp.waitMode, waiting, expected, song.keySharps, Modifier.align(Alignment.TopEnd))
+            val la = loopA; val lb = loopB
+            if (la != null && lb != null) Row(
+                Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xE61B2A4A), RoundedCornerShape(99.dp)).padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val last = (barIndexAt(lb - 0.01) + 1).coerceAtLeast(barIndexAt(la) + 1)
+                Text("Loop bars ${barIndexAt(la) + 1}–$last" + (if (loopOn) "" else " (off)") + (if (loopPasses > 0) " · ×${loopPasses + 1}" else ""),
+                    color = Color(0xFFCFE0FF), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { loopOn = !loopOn })
+                Box(Modifier.size(36.dp).clickable { loopA = null; loopB = null; loopOn = false; loopPasses = 0 }, contentAlignment = Alignment.Center) {
+                    Text("✕", color = Color(0xFFCFE0FF), fontSize = 14.sp)
+                }
+            }
         }
     }
 
@@ -307,11 +354,39 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
         KeyStrip(lo, hi, practice.held, expected, Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 12.dp))
     }
 
+    var kbLo by remember(practice) {
+        val ps = practice?.steps?.flatMap { s -> s.targets.map { it.pitch } }?.sorted().orEmpty()
+        val med = ps.getOrNull(ps.size / 2) ?: 60
+        mutableIntStateOf(((med / 12) * 12 - 12).coerceIn(24, 84))
+    }
+
+    @Composable
+    fun Keys(height: androidx.compose.ui.unit.Dp) {
+        if (!pp.onScreen) { Strip(); return }
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)) {
+            val whites = (maxWidth.value / 40f).toInt().coerceIn(8, 29)
+            var hi = kbLo; var n = 1
+            while (n < whites && hi < 108) { hi++; if (!isBlackPitch(hi)) n++ }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.width(30.dp).height(height).background(Palette.Card, RoundedCornerShape(8.dp)).clickable { kbLo = (kbLo - 12).coerceAtLeast(24) },
+                    contentAlignment = Alignment.Center) { Text("‹", color = Palette.Text1, fontSize = 22.sp) }
+                OnScreenKeys(kbLo, hi, if (active) practice?.held ?: emptySet() else emptySet(), expected,
+                    onDown = { k, v -> Synth.noteOn(k, v); kb.events.add(KeyEvent(k, v, true, System.nanoTime(), fromScreen = true)) },
+                    onUp = { k -> Synth.noteOff(k); kb.events.add(KeyEvent(k, 0, false, System.nanoTime(), fromScreen = true)) },
+                    modifier = Modifier.weight(1f).height(height))
+                Box(Modifier.width(30.dp).height(height).background(Palette.Card, RoundedCornerShape(8.dp)).clickable { kbLo = (kbLo + 12).coerceAtMost(96) },
+                    contentAlignment = Alignment.Center) { Text("›", color = Palette.Text1, fontSize = 22.sp) }
+            }
+        }
+    }
+
     @Composable
     fun MoreMenu() {
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Parts (show / hear)") }, onClick = { menu = false; showParts = true })
             DropdownMenuItem(text = { Text("Lyrics") }, onClick = { menu = false; showLyricsMenu = true })
+            DropdownMenuItem(text = { Text(if (pp.onScreen) "Hide on-screen piano" else "Show on-screen piano") }, onClick = { menu = false; pp.changeOnScreen(!pp.onScreen) })
+            DropdownMenuItem(text = { Text("Loop this bar") }, onClick = { menu = false; loopBar(now) })
             DropdownMenuItem(text = { Text(if (kb.connectedName != null) "Keyboard: ${kb.connectedName}" else "Connect a keyboard") }, onClick = { menu = false; showKeys = true })
             DropdownMenuItem(text = { Text("Settings and skins") }, onClick = { menu = false; vm.openSettings(true) })
             DropdownMenuItem(text = { Text("Bigger notes") }, onClick = { zoomIn() })
@@ -340,11 +415,12 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                     SmallButton(mode.label, Modifier.width(64.dp)) { mode = Mode.entries[(mode.ordinal + 1) % Mode.entries.size] }
                     PlayButton(playing, 56, togglePlay)
                     SmallButton(speedLabel, Modifier.width(64.dp)) { nextSpeed() }
+                    SmallButton(if (loopOn) "Loop ●" else "Loop", Modifier.width(64.dp)) { toggleLoop() }
                     Box { IconBtn("More", { menu = true }) { Text("⋮", color = Palette.Text1, fontSize = 22.sp) }; MoreMenu() }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().padding(top = 6.dp, end = 8.dp, bottom = 2.dp)) {
                     LessonView(Modifier.weight(1f).fillMaxWidth())
-                    Strip()
+                    Keys(110.dp)
                     LyricsExtras()
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
@@ -362,7 +438,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                         Text(songInfo(song), color = Palette.Muted, fontSize = 12.sp, maxLines = 1)
                     }
                     TextButton(onClick = { showParts = true }) { Text("Parts", color = Palette.Accent) }
-                    TextButton(onClick = { showKeys = true }) { Text(if (kb.connectedName != null) "● Keys" else "Keys", color = if (kb.connectedName != null) Color(0xFF49D6A0) else Palette.Accent) }
+                    TextButton(onClick = { player.pause(); playing = false; showKeys = true }) { Text(if (kb.connectedName != null) "● Keys" else "Keys", color = if (kb.connectedName != null) Color(0xFF49D6A0) else Palette.Accent) }
                     Box { IconBtn("More", { menu = true }) { Text("⋮", color = Palette.Text1, fontSize = 22.sp) }; MoreMenu() }
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).background(Palette.Card, RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).padding(4.dp),
@@ -374,7 +450,7 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                     }
                 }
                 LessonView(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
-                Strip()
+                Keys(150.dp)
                 LyricsExtras()
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(fmt(now), color = Palette.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
@@ -385,8 +461,8 @@ private fun LessonScreen(song: Song, lyrics: Lyrics?, skin: Skin, vm: LibraryVie
                     SmallButton(speedLabel) { nextSpeed() }
                     IconBtn("Back 5 seconds", { seek(now - 5) }) { Text("↺5", color = Palette.Text1, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
                     PlayButton(playing, 64, togglePlay)
-                    SmallButton("−") { zoomOut() }
-                    SmallButton("+") { zoomIn() }
+                    SmallButton(if (loopOn) "Loop ●" else "Loop") { toggleLoop() }
+                    SmallButton(if (pp.onScreen) "Piano ●" else "Piano") { pp.changeOnScreen(!pp.onScreen) }
                 }
             }
         }
@@ -519,7 +595,7 @@ private fun MenuItem(text: String, onClick: () -> Unit) {
 
 /** Time plain lyrics: play the song and tap as each line starts. */
 @Composable
-private fun TapSync(lyrics: Lyrics, player: MidiPlayer, onDone: (Lyrics) -> Unit, onCancel: () -> Unit) {
+private fun TapSync(lyrics: Lyrics, player: SongPlayer, onDone: (Lyrics) -> Unit, onCancel: () -> Unit) {
     val lines = lyrics.untimedLines
     val taps = remember { mutableStateListOf<Double>() }
     Panel(Modifier.padding(horizontal = 12.dp)) {
@@ -606,3 +682,5 @@ private fun PracticeHud(p: Practice, wait: Boolean, waiting: Boolean, expected: 
             color = Palette.OnAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color(0xFFFFB23F), RoundedCornerShape(99.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
     }
 }
+
+private fun isBlackPitch(p: Int) = (p % 12) in intArrayOf(1, 3, 6, 8, 10)
