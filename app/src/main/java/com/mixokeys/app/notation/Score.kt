@@ -1,8 +1,8 @@
-package com.sirveillanceai.mixokeys.notation
+package com.mixokeys.app.notation
 
-import com.sirveillanceai.mixokeys.midi.Part
-import com.sirveillanceai.mixokeys.midi.Song
-import com.sirveillanceai.mixokeys.music.Spelling
+import com.mixokeys.app.midi.Part
+import com.mixokeys.app.midi.Song
+import com.mixokeys.app.music.Spelling
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -50,7 +50,7 @@ class Measure(val index: Int, val start: Int, val len: Int, val num: Int, val de
 
 class Score(val song: Song, val measures: List<Measure>, val key: Int, private val unitToSec: (Double) -> Double,
             /** Identifies a note's head on the sheet (grid position * 128 + pitch), for marking it right or wrong. */
-            val unitKey: (com.sirveillanceai.mixokeys.midi.Note) -> Long) {
+            val unitKey: (com.mixokeys.app.midi.Note) -> Long) {
     fun timeOf(measure: Measure, pos: Double) = unitToSec(measure.start + pos)
 
     companion object {

@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys
+package com.mixokeys.app
 
 import android.content.Intent
 import android.net.Uri
@@ -38,29 +38,29 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sirveillanceai.mixokeys.lyrics.Lyrics
-import com.sirveillanceai.mixokeys.midi.Part
-import com.sirveillanceai.mixokeys.midi.Song
-import com.sirveillanceai.mixokeys.music.Chords
-import com.sirveillanceai.mixokeys.music.Tab
-import com.sirveillanceai.mixokeys.ui.ChordDiagram
-import com.sirveillanceai.mixokeys.ui.FallingView
-import com.sirveillanceai.mixokeys.ui.LyricsBar
-import com.sirveillanceai.mixokeys.ui.Palette
-import com.sirveillanceai.mixokeys.ui.SheetView
-import com.sirveillanceai.mixokeys.ui.Skin
-import com.sirveillanceai.mixokeys.notation.Score
+import com.mixokeys.app.lyrics.Lyrics
+import com.mixokeys.app.midi.Part
+import com.mixokeys.app.midi.Song
+import com.mixokeys.app.music.Chords
+import com.mixokeys.app.music.Tab
+import com.mixokeys.app.ui.ChordDiagram
+import com.mixokeys.app.ui.FallingView
+import com.mixokeys.app.ui.LyricsBar
+import com.mixokeys.app.ui.Palette
+import com.mixokeys.app.ui.SheetView
+import com.mixokeys.app.ui.Skin
+import com.mixokeys.app.notation.Score
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import com.sirveillanceai.mixokeys.ui.TabView
-import com.sirveillanceai.mixokeys.ui.KeyboardDialog
-import com.sirveillanceai.mixokeys.ui.KeyStrip
-import com.sirveillanceai.mixokeys.ui.OnScreenKeys
-import com.sirveillanceai.mixokeys.ui.LoopRange
-import com.sirveillanceai.mixokeys.audio.Synth
-import com.sirveillanceai.mixokeys.input.KeyEvent
-import com.sirveillanceai.mixokeys.practice.Practice
-import com.sirveillanceai.mixokeys.music.Spelling
+import com.mixokeys.app.ui.TabView
+import com.mixokeys.app.ui.KeyboardDialog
+import com.mixokeys.app.ui.KeyStrip
+import com.mixokeys.app.ui.OnScreenKeys
+import com.mixokeys.app.ui.LoopRange
+import com.mixokeys.app.audio.Synth
+import com.mixokeys.app.input.KeyEvent
+import com.mixokeys.app.practice.Practice
+import com.mixokeys.app.music.Spelling
 
 class MainActivity : ComponentActivity() {
     private val vm: LibraryViewModel by viewModels()
@@ -480,7 +480,7 @@ private fun BoxScope.Hint(text: String) {
 
 @Composable
 private fun GuitarPane(
-    song: Song, parts: List<Part>, chords: List<com.sirveillanceai.mixokeys.music.Chord>, tab: List<com.sirveillanceai.mixokeys.music.TabNote>,
+    song: Song, parts: List<Part>, chords: List<com.mixokeys.app.music.Chord>, tab: List<com.mixokeys.app.music.TabNote>,
     tabPartId: String?, now: Double, zoom: Float, seek: (Double) -> Unit, onPart: (String) -> Unit,
 ) {
     val ci = chords.indexOfLast { it.start <= now + 0.02 }
@@ -675,7 +675,7 @@ private fun PracticeHud(p: Practice, wait: Boolean, waiting: Boolean, expected: 
             Text("${p.accuracy}%", color = Palette.Text1, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
         if (!wait) p.lastGrade?.let { g ->
-            Text(g.name.uppercase(), color = when (g) { com.sirveillanceai.mixokeys.practice.Grade.Perfect -> Color(0xFF49D6A0); com.sirveillanceai.mixokeys.practice.Grade.Missed -> Color(0xFFFF7A7A); else -> Color(0xFFFFC93C) },
+            Text(g.name.uppercase(), color = when (g) { com.mixokeys.app.practice.Grade.Perfect -> Color(0xFF49D6A0); com.mixokeys.app.practice.Grade.Missed -> Color(0xFFFF7A7A); else -> Color(0xFFFFC93C) },
                 fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.background(Color(0xE616161E), RoundedCornerShape(99.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
         }
         if (waiting && expected.isNotEmpty()) Text("Play " + expected.sorted().joinToString(" ") { Spelling.noteName(it, key) },

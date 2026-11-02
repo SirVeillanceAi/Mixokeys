@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.ui
+package com.mixokeys.app.ui
 
 import android.Manifest
 import android.content.Context
@@ -28,12 +28,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sirveillanceai.mixokeys.PracticePrefs
-import com.sirveillanceai.mixokeys.input.MidiKeyboard
-import com.sirveillanceai.mixokeys.midi.Midi
-import com.sirveillanceai.mixokeys.MidiPlayer
-import com.sirveillanceai.mixokeys.audio.Synth
-import com.sirveillanceai.mixokeys.practice.Strictness
+import com.mixokeys.app.PracticePrefs
+import com.mixokeys.app.input.MidiKeyboard
+import com.mixokeys.app.midi.Midi
+import com.mixokeys.app.MidiPlayer
+import com.mixokeys.app.audio.Synth
+import com.mixokeys.app.practice.Strictness
 import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
 import java.io.File

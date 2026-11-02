@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.midi
+package com.mixokeys.app.midi
 
 import java.io.ByteArrayOutputStream
 import java.io.File

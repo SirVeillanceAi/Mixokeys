@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys
+package com.mixokeys.app
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo

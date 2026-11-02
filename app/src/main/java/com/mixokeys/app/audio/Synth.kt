@@ -1,10 +1,10 @@
-package com.sirveillanceai.mixokeys.audio
+package com.mixokeys.app.audio
 
 import android.content.Context
 import android.media.AudioManager
-import com.sirveillanceai.mixokeys.SongPlayer
-import com.sirveillanceai.mixokeys.midi.Midi
-import com.sirveillanceai.mixokeys.midi.Song
+import com.mixokeys.app.SongPlayer
+import com.mixokeys.app.midi.Midi
+import com.mixokeys.app.midi.Song
 import java.io.File
 import kotlin.math.abs
 

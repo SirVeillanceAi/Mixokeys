@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.ui
+package com.mixokeys.app.ui
 
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -32,21 +32,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
-import com.sirveillanceai.mixokeys.R
-import com.sirveillanceai.mixokeys.lyrics.Lyrics
-import com.sirveillanceai.mixokeys.notation.BeamEl
-import com.sirveillanceai.mixokeys.notation.DotEl
-import com.sirveillanceai.mixokeys.notation.El
-import com.sirveillanceai.mixokeys.notation.Engraver
-import com.sirveillanceai.mixokeys.notation.FlagEl
-import com.sirveillanceai.mixokeys.notation.GlyphEl
-import com.sirveillanceai.mixokeys.notation.LineEl
-import com.sirveillanceai.mixokeys.notation.NameEl
-import com.sirveillanceai.mixokeys.notation.Score
-import com.sirveillanceai.mixokeys.notation.SystemLayout
-import com.sirveillanceai.mixokeys.notation.TextEl
-import com.sirveillanceai.mixokeys.notation.TieEl
-import com.sirveillanceai.mixokeys.practice.Grade
+import com.mixokeys.app.R
+import com.mixokeys.app.lyrics.Lyrics
+import com.mixokeys.app.notation.BeamEl
+import com.mixokeys.app.notation.DotEl
+import com.mixokeys.app.notation.El
+import com.mixokeys.app.notation.Engraver
+import com.mixokeys.app.notation.FlagEl
+import com.mixokeys.app.notation.GlyphEl
+import com.mixokeys.app.notation.LineEl
+import com.mixokeys.app.notation.NameEl
+import com.mixokeys.app.notation.Score
+import com.mixokeys.app.notation.SystemLayout
+import com.mixokeys.app.notation.TextEl
+import com.mixokeys.app.notation.TieEl
+import com.mixokeys.app.practice.Grade
 import kotlin.math.abs
 import kotlin.math.max
 

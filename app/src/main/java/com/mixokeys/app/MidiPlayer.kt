@@ -1,9 +1,9 @@
-package com.sirveillanceai.mixokeys
+package com.mixokeys.app
 
 import android.content.Context
 import android.media.MediaPlayer
-import com.sirveillanceai.mixokeys.midi.Midi
-import com.sirveillanceai.mixokeys.midi.Song
+import com.mixokeys.app.midi.Midi
+import com.mixokeys.app.midi.Song
 import java.io.File
 import kotlin.math.abs
 
@@ -31,7 +31,7 @@ interface SongPlayer {
 
 /** FluidSynth when it's available (better sound, live speed), otherwise Android's built-in synthesizer. */
 fun MidiPlayer(context: Context, song: Song, onEnd: () -> Unit): SongPlayer =
-    if (com.sirveillanceai.mixokeys.audio.Synth.ready) com.sirveillanceai.mixokeys.audio.FluidSongPlayer(context, song, onEnd)
+    if (com.mixokeys.app.audio.Synth.ready) com.mixokeys.app.audio.FluidSongPlayer(context, song, onEnd)
     else SonivoxPlayer(context, song, onEnd)
 
 class SonivoxPlayer(private val context: Context, private val song: Song, private val onEnd: () -> Unit) : SongPlayer {

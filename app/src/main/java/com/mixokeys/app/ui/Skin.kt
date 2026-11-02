@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.ui
+package com.mixokeys.app.ui
 
 import androidx.compose.ui.graphics.Color
 

@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.sirveillanceai.mixokeys"
+    namespace = "com.mixokeys.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.sirveillanceai.mixokeys"
+        applicationId = "com.mixokeys.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.6.0"
+        versionCode = 8
+        versionName = "0.6.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_shared") } }
     }

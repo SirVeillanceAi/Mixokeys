@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys
+package com.mixokeys.app
 
 import android.app.Application
 import android.content.Intent
@@ -6,12 +6,12 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.sirveillanceai.mixokeys.lyrics.Lyrics
-import com.sirveillanceai.mixokeys.midi.Midi
-import com.sirveillanceai.mixokeys.midi.Song
-import com.sirveillanceai.mixokeys.ui.Skin
-import com.sirveillanceai.mixokeys.input.MidiKeyboard
-import com.sirveillanceai.mixokeys.practice.Strictness
+import com.mixokeys.app.lyrics.Lyrics
+import com.mixokeys.app.midi.Midi
+import com.mixokeys.app.midi.Song
+import com.mixokeys.app.ui.Skin
+import com.mixokeys.app.input.MidiKeyboard
+import com.mixokeys.app.practice.Strictness
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -54,7 +54,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The connected MIDI keyboard (USB or Bluetooth); stays connected across songs. */
     val keyboard = MidiKeyboard(app).also { it.start() }
-    init { viewModelScope.launch(Dispatchers.IO) { com.sirveillanceai.mixokeys.audio.Synth.init(app) } }
+    init { viewModelScope.launch(Dispatchers.IO) { com.mixokeys.app.audio.Synth.init(app) } }
     val practice = PracticePrefs(app)
 
     override fun onCleared() { keyboard.stop() }
@@ -77,7 +77,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 if (persist) runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                withContext(Dispatchers.IO) { com.sirveillanceai.mixokeys.audio.Synth.init(app) }
+                withContext(Dispatchers.IO) { com.mixokeys.app.audio.Synth.init(app) }
                 val name = displayName(uri)
                 val (song, key) = withContext(Dispatchers.IO) {
                     val bytes = app.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Couldn't open the file.")

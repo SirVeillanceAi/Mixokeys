@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.practice
+package com.mixokeys.app.practice
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.sirveillanceai.mixokeys.midi.Note
+import com.mixokeys.app.midi.Note
 import kotlin.math.abs
 
 enum class Grade { Perfect, Good, Ok, Missed }

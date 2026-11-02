@@ -1,6 +1,6 @@
-package com.sirveillanceai.mixokeys.lyrics
+package com.mixokeys.app.lyrics
 
-import com.sirveillanceai.mixokeys.midi.Song
+import com.mixokeys.app.midi.Song
 import kotlin.math.max
 
 /** A piece of a line that lights up at [start] and is fully sung by [end]. */

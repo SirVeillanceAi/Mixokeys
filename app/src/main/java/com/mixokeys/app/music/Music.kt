@@ -1,8 +1,8 @@
-package com.sirveillanceai.mixokeys.music
+package com.mixokeys.app.music
 
-import com.sirveillanceai.mixokeys.midi.Note
-import com.sirveillanceai.mixokeys.midi.Part
-import com.sirveillanceai.mixokeys.midi.Song
+import com.mixokeys.app.midi.Note
+import com.mixokeys.app.midi.Part
+import com.mixokeys.app.midi.Song
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min

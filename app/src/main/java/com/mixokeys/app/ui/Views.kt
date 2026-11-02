@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.ui
+package com.mixokeys.app.ui
 
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -32,14 +32,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
-import com.sirveillanceai.mixokeys.R
-import com.sirveillanceai.mixokeys.lyrics.Lyrics
-import com.sirveillanceai.mixokeys.midi.Note
-import com.sirveillanceai.mixokeys.midi.Song
-import com.sirveillanceai.mixokeys.music.Chord
-import com.sirveillanceai.mixokeys.music.Chords
-import com.sirveillanceai.mixokeys.music.Spelling
-import com.sirveillanceai.mixokeys.music.TabNote
+import com.mixokeys.app.R
+import com.mixokeys.app.lyrics.Lyrics
+import com.mixokeys.app.midi.Note
+import com.mixokeys.app.midi.Song
+import com.mixokeys.app.music.Chord
+import com.mixokeys.app.music.Chords
+import com.mixokeys.app.music.Spelling
+import com.mixokeys.app.music.TabNote
 import kotlin.math.max
 import kotlin.math.min
 
@@ -264,7 +264,7 @@ fun LyricsBar(lyrics: Lyrics, now: Double, modifier: Modifier) {
     }
 }
 
-private fun lit(line: com.sirveillanceai.mixokeys.lyrics.LyricLine, now: Double): AnnotatedString = buildAnnotatedString {
+private fun lit(line: com.mixokeys.app.lyrics.LyricLine, now: Double): AnnotatedString = buildAnnotatedString {
     val on = SpanStyle(color = Palette.Now)
     val off = SpanStyle(color = Palette.Text1)
     for (s in line.syllables) {

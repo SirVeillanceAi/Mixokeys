@@ -1,4 +1,4 @@
-package com.sirveillanceai.mixokeys.input
+package com.mixokeys.app.input
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice

@@ -5,7 +5,7 @@
 #include <fluidsynth.h>
 
 #define TAG "MixokeysSynth"
-#define FN(name) Java_com_sirveillanceai_mixokeys_audio_Synth_##name
+#define FN(name) Java_com_mixokeys_app_audio_Synth_##name
 
 static fluid_settings_t *settings = NULL;
 static fluid_synth_t *synth = NULL;
